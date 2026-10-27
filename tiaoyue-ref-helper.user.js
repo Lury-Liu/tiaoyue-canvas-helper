@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.5.0
+// @version      1.5.1
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
