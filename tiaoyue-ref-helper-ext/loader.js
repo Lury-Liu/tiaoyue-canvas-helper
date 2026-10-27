@@ -74,7 +74,8 @@
     // 3) 联网检查
     await store.set({ [K.at]: Date.now(), [K.status]: '检查中…' });
     try {
-      const meta = JSON.parse(await fetchText(`${BASE}/tiaoyue-ref-helper-ext/version.json`));
+      // 加时间戳穿透 raw.githubusercontent 的 CDN 缓存（刚推送时可能仍返回旧版本）
+      const meta = JSON.parse(await fetchText(`${BASE}/tiaoyue-ref-helper-ext/version.json?t=${Date.now()}`));
       const online = String(meta.version || '');
       await store.set({ [K.online]: online });
       if (!online) throw new Error('version.json 缺少 version 字段');

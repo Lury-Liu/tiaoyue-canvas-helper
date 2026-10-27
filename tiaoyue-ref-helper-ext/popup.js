@@ -34,7 +34,7 @@ $('recheck').addEventListener('click', async () => {
   const btn = $('recheck');
   btn.disabled = true; btn.textContent = '检查中…';
   try {
-    const meta = await (await fetch(`${BASE}/tiaoyue-ref-helper-ext/version.json`, { cache: 'no-store' })).json();
+    const meta = await (await fetch(`${BASE}/tiaoyue-ref-helper-ext/version.json?t=${Date.now()}`, { cache: 'no-store' })).json();
     const online = String(meta.version || '');
     await chrome.storage.local.set({ [K.online]: online, [K.at]: Date.now() });
     if (online && cmp(online, BUNDLED) > 0) {
