@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<style>
+  body{margin:0;width:300px;background:#17181c;color:#e5e7eb;font:13px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif}
+  .hd{display:flex;align-items:center;gap:8px;padding:12px 14px 8px;font-weight:600}
+  .dot{width:8px;height:8px;border-radius:4px;background:#22c55e;box-shadow:0 0 8px #22c55e88}
+  .bd{padding:0 14px 14px}
+  .k{display:inline-block;min-width:18px;text-align:center;padding:1px 6px;border-radius:5px;background:#22242a;border:1px solid #ffffff1f;font:11.5px ui-monospace,Consolas,monospace;color:#c7d2fe}
+  ul{margin:6px 0 0;padding:0 0 0 2px;list-style:none}
+  li{display:flex;gap:8px;align-items:baseline;margin:7px 0;color:#cbd5e1}
+  .t{color:#9ca3af;font-size:12px;border-top:1px solid #ffffff14;margin-top:10px;padding-top:9px}
+  .upd{border-top:1px solid #ffffff14;margin-top:10px;padding-top:9px;font-size:12px;color:#9ca3af}
+  .upd b{color:#e5e7eb;font-weight:600}
+  .row{display:flex;justify-content:space-between;gap:8px;margin:3px 0}
+  .btn{margin-top:8px;width:100%;padding:6px 0;border-radius:6px;border:1px solid #ffffff26;background:#22242a;color:#c7d2fe;font:12px system-ui;cursor:pointer}
+  .btn:hover{background:#2a2d35}
+  #st.ok{color:#86efac}
+  #st.err{color:#fca5a5}
+</style>
+</head>
+<body>
+  <div class="hd"><span class="dot"></span>画布引用助手 已启用</div>
+  <div class="bd">
+    <ul>
+      <li><span class="k">Alt</span><span class="k">A</span><span>打开面板 / 一键转引用</span></li>
+      <li><span class="k">Alt</span><span class="k">Z</span><span>撤销上一步改写</span></li>
+      <li><span class="k">Alt</span><span class="k">⇧</span><span class="k">Z</span><span>重做</span></li>
+      <li><span class="k">Ctrl</span><span class="k">F</span><span>提示词框内查找替换</span></li>
+      <li><span class="k">⏎</span><span>两步插入：点素材 → 点正文选位置 → 回车确认</span></li>
+      <li><span class="k">Esc</span><span>取消选中 / 关闭面板</span></li>
+      <li><span class="k">＠</span><span>悬浮球/面板都可拖动，位置自动记住</span></li>
+    </ul>
+
+    <div class="upd">
+      <div class="row"><span>内置版本</span><b id="local">-</b></div>
+      <div class="row"><span>运行版本</span><b id="run">-</b></div>
+      <div class="row"><span>在线版本</span><b id="online">-</b></div>
+      <div class="row"><span>状态</span><b id="st">-</b></div>
+      <button class="btn" id="recheck">立即检查更新</button>
+    </div>
+
+    <div class="t">首次使用会自动弹出上手指南（面板右上角 <b>?</b> 可随时再看）。定位（点名字/已引用）不会改变插入位置。素材请走画布「添加资源 → 上传」导入，否则名字会变成 image.png。</div>
+  </div>
+<script src="config.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

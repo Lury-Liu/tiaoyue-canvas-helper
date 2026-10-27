@@ -1,0 +1,10 @@
+ty_probe/
+node_modules/
+*.zip
+ISSUES.md
+panel-*.png
+tiaoyue-guide-preview.png
+.DS_Store
+Thumbs.db
+.workbuddy/
+ty.html
