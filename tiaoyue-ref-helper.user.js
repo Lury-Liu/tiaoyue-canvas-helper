@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.9.0
+// @version      1.10.0
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -30,7 +30,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.9.0';
+  const TYQ_VERSION = '1.10.0';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -216,6 +216,15 @@
   const EXT_RE = /\.(png|jpe?g|webp|bmp|gif|mp4|mov|webm|mp3|wav|m4a|pcm|ogg)$/i;
   const stripExt = (s) => (s || '').replace(EXT_RE, '');
   const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // 通用上传文件名（原名丢失）：image.png / screenshot_1.jpg / 32 位 hash.png 等。
+  // 这类名字出现在正文里多半是粘贴脚本自带的占位，不代表想引用该素材，只做标注不跳过。
+  const GENERIC_NAME_RE = /^(image|img|screenshot|screen ?shot|untitled|unnamed|file|avatar|封面|截图|屏幕截图|image \(\d+\))[\s_\-]*\d*$/i;
+  const HASH_NAME_RE = /^[0-9a-f]{16,}$/i;
+  function isGenericName(s) {
+    const bare = stripExt(String(s || '').trim());
+    return !!bare && (GENERIC_NAME_RE.test(bare) || HASH_NAME_RE.test(bare));
+  }
 
   function buildIndex(refs) {
     const counters = { image: 0, video: 0, audio: 0 };
@@ -437,6 +446,15 @@
   .tyq-cname{max-width:118px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d7dbe2}
   .tyq-pin{position:fixed;pointer-events:none;border:2px solid #60a5fa;border-radius:5px;z-index:2147483004;
     box-shadow:0 0 0 3px rgba(96,165,250,.25),0 0 18px rgba(96,165,250,.6);display:none}
+  .tyq-hl{position:fixed;pointer-events:none;border-radius:3px;background:rgba(250,204,21,.30);
+    box-shadow:0 0 0 1px rgba(250,204,21,.55);z-index:2147482998;display:none}
+  .tyq-hl.now{background:rgba(96,165,250,.40);box-shadow:0 0 0 1px rgba(96,165,250,.95),0 0 10px rgba(96,165,250,.55);z-index:2147482999}
+  .tyq-badge{flex:none;font-size:10px;color:#fbbf24;background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.35);
+    border-radius:5px;padding:0 5px;line-height:16px;cursor:help}
+  .tyq-fbox{border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:4px 6px;margin-top:6px;
+    background:rgba(255,255,255,.02);max-height:132px;overflow:auto}
+  .tyq-fmatch{display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:12px;border-radius:6px;cursor:pointer}
+  .tyq-fmatch:hover{background:rgba(96,165,250,.12)}
   /* 隐藏画布自带的"跳跃AI"悬浮助手（gc-float 触发钮 + 面板），只保留本插件 */
   .gc-float{display:none!important}
   .tyq-help{flex:none;cursor:pointer;color:#9ca3af;width:18px;height:18px;border-radius:9px;
@@ -703,6 +721,7 @@
   function close() {
     if (!ui) return;
     clearPin();
+    clearFindHL();
     ui.panel.classList.remove('open');
   }
 
@@ -755,6 +774,8 @@
 
   function render() {
     clearPin();
+    clearFindHL();
+    findRefreshHook = null;
     if (!ui) return;
     ui.panel.querySelectorAll('.tyq-tab').forEach((t) => t.classList.toggle('on', t.dataset.tab === activeTab));
     const body = ui.body;
@@ -871,6 +892,11 @@
         nm.title = '点击定位到原文（重复点击跳到下一处）';
         nm.addEventListener('click', () => jumpTo(m));
         row.appendChild(nm);
+        if (isGenericName(m.name) || isGenericName(m.label)) {
+          const bd = el('span', 'tyq-badge', '通用文件名');
+          bd.title = '素材原名已丢失（如 image.png）。正文里同样写法的文字可能不是指这个素材，转换前请核对。';
+          row.appendChild(bd);
+        }
         row.appendChild(el('span', 'tyq-token', m.token));
         row.appendChild(el('span', 'tyq-mcnt', '×' + m.count));
         box.appendChild(row);
@@ -1183,6 +1209,60 @@
     } catch (e) { return null; }
   }
 
+  /* ---------------- 查找高亮 ----------------
+   * 正文里所有命中都套一层半透明框（黄），当前命中额外加蓝色描边。
+   * 逐帧跟随 Range，滚动/重排不飞；用 pinClipRects 做裁剪，滚出提示词区即隐藏。 */
+  let hlLayer = null;
+  let hlRaf = 0;
+  let findRefreshHook = null;   // 当前查找页的刷新函数（编辑器内容变化时重画高亮）
+
+  function clearFindHL() {
+    if (hlRaf) { cancelAnimationFrame(hlRaf); hlRaf = 0; }
+    if (hlLayer) { hlLayer.remove(); hlLayer = null; }
+  }
+
+  function drawFindHL(ranges, activeIdx) {
+    clearFindHL();
+    if (!alive || !ranges.length) return;
+    const boxes = ranges.slice(0, 300).map((rg, i) => {
+      const b = el('div', 'tyq-hl' + (i === activeIdx ? ' now' : ''));
+      b.__range = rg;
+      b.style.display = 'none';
+      return b;
+    });
+    const layer = el('div', '');
+    layer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147482998';
+    boxes.forEach((b) => layer.appendChild(b));
+    document.body.appendChild(layer);
+    hlLayer = layer;
+    const vh = () => window.innerHeight, vw = () => window.innerWidth;
+    const tick = () => {
+      if (!layer.isConnected || !alive) { clearFindHL(); return; }
+      for (const b of boxes) {
+        let rect = null;
+        try { rect = b.__range.getBoundingClientRect(); } catch (e) { rect = null; }
+        let show = false;
+        if (rect && (rect.width || rect.height)) {
+          const clips = pinClipRects(b.__range);
+          show = clips.every((c) => rect.bottom > c.top + 1 && rect.top < c.bottom - 1 &&
+            rect.right > c.left + 1 && rect.left < c.right - 1) &&
+            rect.bottom > 0 && rect.top < vh() && rect.right > 0 && rect.left < vw();
+        }
+        if (show) {
+          b.style.display = 'block';
+          b.style.left = (rect.left - 2) + 'px';
+          b.style.top = (rect.top - 2) + 'px';
+          b.style.width = Math.max(rect.width + 4, 4) + 'px';
+          b.style.height = Math.max(rect.height + 4, 4) + 'px';
+        } else {
+          b.style.display = 'none';
+        }
+      }
+      hlRaf = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
   /* ---------------- 查找替换 ---------------- */
   let findState = { find: '', rep: '', last: -1, useRef: '', ic: true };
 
@@ -1222,6 +1302,9 @@
     const info = el('div', 'tyq-hint', '');
     body.appendChild(info);
 
+    const assetBox = el('div', '');
+    body.appendChild(assetBox);
+
     const row1 = el('div', 'tyq-row');
     const prev = el('button', 'tyq-btn', '上一个');
     const next = el('button', 'tyq-btn', '下一个');
@@ -1230,14 +1313,63 @@
     [prev, next, rep1, repAll].forEach((b) => row1.appendChild(b));
     body.appendChild(row1);
 
-    const refreshInfo = () => {
-      const text = serialize(a.el);
-      const q = f.value;
-      if (!q) { info.textContent = '输入要查找的内容'; return; }
-      const n = countOccurrences(text, q, ic.checked);
-      info.innerHTML = n ? `共 <span class="tyq-count">${n}</span> 处匹配` : '未找到匹配';
+    // 素材名匹配：查的不只是正文，素材名字也能搜到，点一下定位到正文里的引用
+    const hitsOf = (q) => {
+      if (!q) return [];
+      const lq = q.toLowerCase();
+      return index
+        .filter((it) => it.name.toLowerCase().includes(lq) || it.bare.toLowerCase().includes(lq))
+        .slice(0, 8);
     };
-    refreshInfo();
+
+    const renderAssetHits = (q) => {
+      assetBox.innerHTML = '';
+      const hits = hitsOf(q);
+      if (!hits.length) return;
+      const cited = new Map(scanCitations(serialize(a.el), index).map((c) => [c.token, c.count]));
+      assetBox.appendChild(el('div', 'tyq-sub', '素材名匹配（点一下定位到正文里的引用）'));
+      const box = el('div', 'tyq-fbox');
+      hits.forEach((it) => {
+        const row = el('div', 'tyq-fmatch');
+        row.appendChild(el('span', 'tyq-token', it.token));
+        row.appendChild(el('span', 'tyq-mname', it.name));
+        if (isGenericName(it.name)) {
+          const bd = el('span', 'tyq-badge', '通用文件名');
+          bd.title = '原名已丢失（如 image.png）。正文里同样写法的文字可能不是指这个素材，转换前请核对。';
+          row.appendChild(bd);
+        }
+        const n = cited.get(it.token) || 0;
+        row.appendChild(el('span', 'tyq-mcnt', n ? '正文×' + n : '未引用'));
+        row.title = n ? `点击定位正文里的 @${it.token}` : `正文里还没有 @${it.token}`;
+        row.addEventListener('click', () => {
+          if (!cited.get(it.token)) { toast(`正文里还没有引用 @${it.token}，可先到「素材」页转换`); return; }
+          jumpToken(it.token);
+        });
+        box.appendChild(row);
+      });
+      assetBox.appendChild(box);
+    };
+
+    // 统一刷新：计数 + 素材名匹配 + 正文高亮（当前命中加蓝框）
+    const refresh = (text) => {
+      const t = text != null ? text : serialize(a.el);
+      const q = f.value;
+      const positions = allPositions(t, q, ic.checked);
+      const cur = positions.indexOf(findState.last);
+      if (!q) {
+        info.textContent = '输入要查找的内容 · 回车跳到下一处';
+      } else if (!positions.length) {
+        info.innerHTML = '未找到匹配' + (hitsOf(q).length ? '（正文里没有，但有同名素材，见下方）' : '');
+      } else {
+        info.innerHTML = `共 <span class="tyq-count">${positions.length}</span> 处匹配` +
+          (cur >= 0 ? ` · 当前第 <span class="tyq-count">${cur + 1}</span>/${positions.length} 处` : ' · 回车跳到第 1 处');
+      }
+      renderAssetHits(q);
+      const ranges = positions.map((at) => rangeFromOffset(a.el, at, at + q.length)).filter(Boolean);
+      drawFindHL(ranges, cur);
+    };
+    findRefreshHook = () => refresh();
+    refresh();
 
     const doFind = (dir) => {
       const text = serialize(a.el);
@@ -1245,17 +1377,24 @@
       if (!q) return;
       const positions = allPositions(text, q, ic.checked);
       if (!positions.length) { toast('未找到匹配'); return; }
-      let idx = positions.indexOf(findState.last);
-      idx = idx === -1 ? (dir > 0 ? 0 : positions.length - 1) : (idx + dir + positions.length) % positions.length;
+      let idx;
+      if (findState.last === -1 || !positions.includes(findState.last)) {
+        idx = dir > 0 ? 0 : positions.length - 1;   // 首次：向下从第 1 处，向上从最后一处
+      } else {
+        const cur = positions.indexOf(findState.last);
+        idx = (cur + dir + positions.length) % positions.length;   // 到末尾回开头，到开头回末尾
+        if (dir > 0 && idx === 0) toast(`已到末尾，从开头继续：第 1/${positions.length} 处`);
+        else if (dir < 0 && idx === positions.length - 1) toast(`已到开头，从末尾继续：第 ${positions.length}/${positions.length} 处`);
+      }
       findState.last = positions[idx];
       const range = rangeFromOffset(a.el, findState.last, findState.last + q.length);
       if (range) {
-        a.el.focus();
+        try { a.el.focus({ preventScroll: true }); } catch (e2) { a.el.focus(); }
         const s = window.getSelection();
         s.removeAllRanges(); s.addRange(range);
-        const node = range.startContainer.parentElement;
-        if (node && node.scrollIntoView) node.scrollIntoView({ block: 'center', behavior: 'auto' });
+        scrollRangeIntoView(range);
       }
+      refresh(text);
     };
 
     const doReplace = () => {
@@ -1270,7 +1409,7 @@
       const out = text.slice(0, at) + rep + text.slice(at + q.length);
       if (!writeText(out, '替换 1 处')) return;
       findState.last = at + rep.length;
-      setTimeout(() => { refreshInfo(); }, 250);
+      setTimeout(() => { refresh(); }, 250);
     };
 
     const doReplaceAll = () => {
@@ -1287,13 +1426,13 @@
       if (!writeText(out, `替换 ${n} 处`)) return;
       findState.last = -1;
       toast(`已替换 ${n} 处，Alt+Z 可撤销`);
-      setTimeout(() => { refreshInfo(); }, 300);
+      setTimeout(() => { refresh(); }, 300);
     };
 
-    f.addEventListener('input', () => { findState.find = f.value; findState.last = -1; refreshInfo(); });
+    f.addEventListener('input', () => { findState.find = f.value; findState.last = -1; refresh(); });
     r.addEventListener('input', () => { findState.rep = r.value; });
     sel.addEventListener('change', () => { findState.useRef = sel.value; });
-    ic.addEventListener('change', () => { findState.ic = ic.checked; findState.last = -1; refreshInfo(); });
+    ic.addEventListener('change', () => { findState.ic = ic.checked; findState.last = -1; refresh(); });
     [f, r].forEach((inp) => inp.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter') { e.preventDefault(); doFind(e.shiftKey ? -1 : 1); }
@@ -1318,7 +1457,6 @@
     while (i !== -1) { out.push(i); i = hay.indexOf(needle, i + needle.length); }
     return out;
   }
-  const countOccurrences = (text, q, ic) => allPositions(text, q, ic).length;
 
   /* ------------------------------------------------------------------ *
    * 4. 事件：快捷键 + 选区记忆
@@ -1389,7 +1527,8 @@
       moTimer = setTimeout(() => {
         if (!alive || !ui) return;
         refreshBadge();
-        if (isOpen() && activeTab !== 'find') rerenderKeepScroll();
+        if (isOpen() && activeTab === 'find') { if (findRefreshHook) findRefreshHook(); }
+        else if (isOpen()) rerenderKeepScroll();
       }, 250);
     });
     contentMO.observe(ed, { childList: true, characterData: true, subtree: true });
@@ -1412,6 +1551,7 @@
     started = false;
     clearInterval(bootTimer);
     clearPin();
+    clearFindHL();
     if (contentMO) { contentMO.disconnect(); contentMO = null; }
     moEditor = null;
     clearTimeout(moTimer);
@@ -1448,6 +1588,8 @@
     countMatches, scanMatches, writeText, undo, redo, goToHistory,
     HIST, placePanel, jumpTo, jumpToken, scanCitations,
     showGuide, maybeShowGuide, LS, GUIDE_KEY,
+    clearFindHL, isGenericName,
+    get findState() { return findState; },
     get panelPos() { return panelPos; },
   };
 })();

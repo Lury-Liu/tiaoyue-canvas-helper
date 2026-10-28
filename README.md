@@ -29,7 +29,7 @@
 | 预览 | 写回前查看转换结果 |
 | 已引用清单 | 列出正文里的 `@图片N`，点击定位 + 高亮，重复点击跳下一处 |
 | 撤销 / 重做 | `Alt+Z` / `Alt+Shift+Z`，按节点归档，最多 20 步 |
-| 查找替换 | `Ctrl+F`，支持「替换为引用」，默认忽略大小写（可关） |
+| 查找替换 | `Ctrl+F`：正文全部命中高亮、回车/Shift+回车逐个跳转（首尾循环并提示）、默认忽略大小写（可关）、素材名也能搜（点结果定位引用）、通用文件名（image.png 等）标注 |
 | 面板拖动 | 面板与悬浮球均可拖，位置本地记忆，双击标题栏复位 |
 | 切节点自动刷新 | 面板打开时切节点，素材列表 ≤0.4s 自动跟随 |
 | 自动更新 | 每次进入画布自动检查 GitHub 并热替换（无需刷新）；断网回退内置版 |
@@ -142,6 +142,9 @@ git add -A && git commit -m "v1.8.0" && git push
 | `render()` / `renderAsset()` | 面板渲染主体 |
 | `syncPanelToEditor()` / `editorKey()` | 切节点自动刷新 |
 | `jumpTo()` / `jumpToken()` / `setPin()` / `followLoop()` | 定位与高亮框 |
+| `renderFind()` / `drawFindHL()` | 查找替换：计数、素材名匹配、多命中高亮与首尾循环 |
+| `isGenericName()` | 通用上传文件名（image.png 等）识别，仅用于标注 |
+| `selfUpdate()` | 每次进画布检查线上版本并热替换 |
 | `pinClipRects()` / `isClipper()` | 高亮裁剪（滚出面板即隐藏） |
 | `showGuide()` / `buildUI()` / `placePanel()` | 引导、UI、定位 |
 | `teardown()` / `onCanvasRoute()` | 路由启停 |
