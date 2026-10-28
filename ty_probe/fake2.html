@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>fake canvas v2</title>
+<style>
+  body{margin:0;background:#0d0e11;color:#7b8291;font:14px system-ui}
+  wujie-app{display:block;height:100vh}
+  #blank{position:fixed;left:0;bottom:0;width:300px;height:160px;background:#14151a}
+</style>
+</head>
+<body>
+<wujie-app id="wj"></wujie-app>
+<div id="blank"></div>
+<script>
+  const BIN_RE = /@(图片|视频|音频)(\d+)/g;
+  const host = document.getElementById('wj');
+  const sr = host.attachShadow({ mode: 'open' });
+  sr.innerHTML = '<div class="_promptEditor_fake" contenteditable="true" ' +
+    'style="margin:36px;padding:12px;width:620px;min-height:120px;border:1px solid #333;' +
+    'background:#1b1b1f;color:#e5e7eb;white-space:pre-wrap"></div>';
+
+  const ed = sr.querySelector('[class*="_promptEditor_"]');
+
+  const referenceItems = [
+    { id: 'a1', type: 'image', assetName: '艾洛文-高级职场套装.png', coverUrl: '' },
+    { id: 'a2', type: 'image', assetName: '巴迪-狗形态.png', coverUrl: '' },
+    { id: 'a3', type: 'image', assetName: '玛拉-便装.png', coverUrl: '' },
+    { id: 'a4', type: 'image', assetName: '艾洛文-高级职场套装.png', coverUrl: '' },
+  ];
+
+  const props = {
+    value: '',
+    maxLength: 5000,
+    referenceItems,
+    onChange(text) {
+      render(text);
+    },
+  };
+
+  function render(text) {
+    ed.textContent = '';
+    const frag = document.createDocumentFragment();
+    BIN_RE.lastIndex = 0;
+    let last = 0, m;
+    while ((m = BIN_RE.exec(text)) !== null) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const span = document.createElement('span');
+      span.className = 'canvas-mention';
+      span.setAttribute('data-mention-token', m[1] + m[2]);
+      span.setAttribute('contenteditable', 'false');
+      span.textContent = '@' + m[1] + m[2];
+      frag.appendChild(span);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    ed.appendChild(frag);
+    props.value = text;
+  }
+
+  // 伪造 React fiber：让脚本的 richFiber() 能找到 value / onChange / referenceItems
+  ed['__reactFiber$fake'] = { memoizedProps: props, return: null };
+
+  const base = '前缀 艾洛文-高级职场套装 中间 巴迪-狗形态 结尾 @图片3 已有引用';
+  render(base);
+
+  window.__fake = {
+    ed, props, render, referenceItems, base,
+    reset() { render(base); window.getSelection().removeAllRanges(); },
+    setCaret(off) {
+      ed.focus();
+      const r = document.createRange();
+      const walker = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+      let acc = 0, node, target = null, targetOff = 0;
+      while ((node = walker.nextNode())) {
+        const len = node.textContent.length;
+        if (acc + len >= off) { target = node; targetOff = off - acc; break; }
+        acc += len;
+      }
+      if (!target) { r.selectNodeContents(ed); r.collapse(false); }
+      else { r.setStart(target, Math.min(targetOff, target.textContent.length)); r.collapse(true); }
+      const s = window.getSelection();
+      s.removeAllRanges(); s.addRange(r);
+      return { off, text: ed.textContent.slice(0, 40) };
+    },
+    citedBadges() { return [...document.querySelectorAll('.tyq-cite-badge')].map(e => e.textContent); },
+    citedChips() { return [...document.querySelectorAll('.tyq-citem')].map(e => e.textContent); },
+    rows() { return [...document.querySelectorAll('.tyq-item')].map(e => e.innerText.replace(/\s+/g, ' ')); },
+  };
+</script>
+</body>
+</html>

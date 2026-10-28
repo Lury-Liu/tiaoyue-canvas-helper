@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  body{margin:0;background:#0d0e11;color:#e5e7eb;font:14px/1.6 system-ui}
+  #canvas{padding:40px}
+  .editor{width:640px;min-height:140px;padding:12px;border:1px solid #3a3a42;background:#1b1b1f;outline:none;white-space:pre-wrap}
+  #ball{position:fixed;right:24px;bottom:120px;width:44px;height:44px;border-radius:22px;background:#3b82f6;
+        color:#fff;text-align:center;line-height:44px;cursor:pointer;user-select:none}
+  #panel{position:fixed;right:24px;bottom:184px;width:300px;background:#17181c;border:1px solid #333;
+         border-radius:12px;padding:10px;display:none}
+  #panel.open{display:block}
+  #search{width:100%;box-sizing:border-box;padding:6px;background:#0f1013;color:#eee;border:1px solid #333;border-radius:6px}
+  .item{padding:6px;cursor:pointer;border-radius:6px}
+  .item:hover{background:#26262c}
+  #dbg{color:#a3e635}
+</style>
+</head>
+<body>
+<div id="canvas"><div id="host"></div></div>
+<div id="ball">＠</div>
+<div id="panel">
+  <div style="margin-bottom:6px;color:#8b94a3;font-size:12px">savedCaret: <span id="dbg">-</span></div>
+  <input id="search" placeholder="搜索素材名字" />
+  <div id="list">
+    <div class="item" data-i="0">艾洛文（图片1）</div>
+    <div class="item" data-i="1">巴迪（图片4）</div>
+  </div>
+</div>
+<script>
+  const host = document.getElementById('host');
+  const sr = host.attachShadow({ mode: 'open' });
+  sr.innerHTML = '<div class="editor" data-p="1">前缀 艾洛文 中间 巴迪 结尾</div>';
+  const ed = sr.querySelector('.editor');
+  const panel = document.getElementById('panel');
+  const dbg = document.getElementById('dbg');
+  const EDITOR_SEL = '[data-p]';
+
+  let savedCaret = 0;
+  let lastEditor = null;
+
+  function serialize(el) {
+    let t = '';
+    const w = (n) => {
+      for (const c of n.childNodes) {
+        if (c.nodeType === 3) { t += c.textContent; }
+        else if (c.nodeType === 1) {
+          if (c.classList && c.classList.contains('chip')) t += '@' + c.dataset.token;
+          else if (c.tagName === 'BR') t += '\n';
+          else w(c);
+        }
+      }
+    };
+    w(el);
+    return t;
+  }
+
+  function caretOffset(el) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return serialize(el).length;
+    const r = sel.getRangeAt(0);
+    if (!el.contains(r.startContainer)) return serialize(el).length;
+    const pre = document.createRange();
+    pre.selectNodeContents(el);
+    pre.setEnd(r.startContainer, r.startOffset);
+    const tmp = document.createElement('div');
+    tmp.appendChild(pre.cloneContents());
+    return serialize(tmp).length;
+  }
+
+  function refresh() { dbg.textContent = savedCaret + ' / len=' + serialize(ed).length; }
+
+  function open() { savedCaret = caretOffset(ed); panel.classList.add('open'); refresh(); }
+  function close() { panel.classList.remove('open'); }
+
+  function insert() {
+    const text = serialize(ed);
+    let caret = savedCaret;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && ed.contains(sel.getRangeAt(0).startContainer)) caret = caretOffset(ed);
+    caret = Math.max(0, Math.min(caret || text.length, text.length));
+    ed.textContent = text.slice(0, caret) + '@图片1' + text.slice(caret);
+    savedCaret = caret + 4;
+    refresh();
+    return { caret, text: serialize(ed) };
+  }
+
+  function editorFromEvent(e) {
+    const path = (e.composedPath && e.composedPath()) || [];
+    for (const n of path) {
+      if (n && n.nodeType === 1 && n.matches && n.matches(EDITOR_SEL)) return n;
+    }
+    return null;
+  }
+
+  document.addEventListener('selectionchange', () => {
+    const s = window.getSelection();
+    if (s && s.rangeCount && ed.contains(s.getRangeAt(0).startContainer)) { savedCaret = caretOffset(ed); lastEditor = ed; refresh(); }
+  });
+
+  ['mouseup', 'keyup', 'input', 'focusin'].forEach((t) => {
+    document.addEventListener(t, (e) => {
+      const x = editorFromEvent(e);
+      if (x) { lastEditor = x; savedCaret = caretOffset(x); refresh(); }
+    }, true);
+  });
+
+  // 悬浮球：点击开合（真实行为）
+  document.getElementById('ball').addEventListener('click', () => {
+    panel.classList.contains('open') ? close() : open();
+  });
+
+  document.getElementById('search').addEventListener('input', () => { /* 只过滤，不动 caret */ });
+
+  document.querySelectorAll('.item').forEach((it) => it.addEventListener('click', () => {
+    window.__lastInsert = insert();
+  }));
+
+  document.addEventListener('keydown', (e) => {
+    if (e.altKey && !e.ctrlKey && (e.key === 'a' || e.key === 'A')) { e.preventDefault(); open(); }
+    if (e.key === 'Escape') close();
+  }, true);
+
+  window.__t = {
+    ed, serialize, caretOffset, open, close, insert,
+    get saved() { return savedCaret; },
+    selInfo() {
+      const s = window.getSelection();
+      if (!s || !s.rangeCount) return { rangeCount: 0 };
+      const r = s.getRangeAt(0);
+      return { rangeCount: 1, inEditor: ed.contains(r.startContainer), collapsed: r.collapsed, text: s.toString() };
+    },
+    setCaret(off) {
+      ed.focus();
+      const r = document.createRange();
+      r.setStart(ed.firstChild, Math.min(off, ed.firstChild.textContent.length));
+      r.collapse(true);
+      s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      return caretOffset(ed);
+    },
+    reset() { ed.textContent = '前缀 艾洛文 中间 巴迪 结尾'; savedCaret = 0; window.__lastInsert = null; refresh(); },
+  };
+  refresh();
+</script>
+</body>
+</html>

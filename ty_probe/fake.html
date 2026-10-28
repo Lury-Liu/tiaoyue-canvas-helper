@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>fake canvas</title>
+<style>body{margin:0;background:#0d0e11;color:#888;font:14px system-ui}wujie-app{display:block;height:100vh}</style>
+</head>
+<body>
+<wujie-app id="wj"></wujie-app>
+<script>
+  const host = document.getElementById('wj');
+  const sr = host.attachShadow({ mode: 'open' });
+  sr.innerHTML = '<div class="_promptEditor_test" contenteditable="true" style="margin:40px;padding:12px;border:1px solid #333;width:600px">前缀 艾洛文 中间 巴迪 结尾</div>';
+</script>
+</body>
+</html>

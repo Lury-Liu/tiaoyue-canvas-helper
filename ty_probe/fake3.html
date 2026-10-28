@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>fake canvas v3 (scrollable)</title>
+<style>
+  body{margin:0;background:#0d0e11;color:#8b94a3;font:14px system-ui}
+  wujie-app{display:block}
+  #scroller{height:260px;overflow:auto;border:1px solid #333;margin:20px;background:#1b1b1f}
+  .ed{padding:10px;color:#e5e7eb;white-space:pre-wrap;outline:none;line-height:1.7}
+  .canvas-mention{background:#233;border-radius:4px;padding:0 3px;color:#9cf}
+</style>
+</head>
+<body>
+<wujie-app id="wj"></wujie-app>
+<script>
+  const BIN_RE = /@(图片|视频|音频)(\d+)/g;
+  const host = document.getElementById('wj');
+  const sr = host.attachShadow({ mode: 'open' });
+  sr.innerHTML = '<style>#scroller{height:260px;overflow-y:auto;border:1px solid #333;margin:20px;background:#1b1b1f}' +
+    '.ed{padding:10px;color:#e5e7eb;white-space:pre-wrap;outline:none;line-height:1.7}' +
+    '.canvas-mention{background:#233;border-radius:4px;padding:0 3px;color:#9cf}</style>' +
+    '<div id="scroller"><div class="_promptEditor_fake ed" contenteditable="true"></div></div>';
+  const scroller = sr.getElementById('scroller');
+  const ed = sr.querySelector('[class*="_promptEditor_"]');
+
+  const referenceItems = [
+    { id: 'a1', type: 'image', assetName: '艾洛文-高级职场套装.png', coverUrl: '' },
+    { id: 'a2', type: 'image', assetName: '巴迪-狗形态.png', coverUrl: '' },
+    { id: 'a3', type: 'image', assetName: '玛拉-便装.png', coverUrl: '' },
+    { id: 'a4', type: 'image', assetName: '西耶娜的手机.png', coverUrl: '' },
+    { id: 'a5', type: 'image', assetName: '告示纸条.png', coverUrl: '' },
+  ];
+
+  const props = { value: '', maxLength: 20000, referenceItems, onChange(t) { render(t); } };
+
+  function render(text) {
+    ed.textContent = '';
+    const frag = document.createDocumentFragment();
+    BIN_RE.lastIndex = 0;
+    let last = 0, m;
+    while ((m = BIN_RE.exec(text)) !== null) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const span = document.createElement('span');
+      span.className = 'canvas-mention';
+      span.setAttribute('data-mention-token', m[1] + m[2]);
+      span.setAttribute('contenteditable', 'false');
+      span.textContent = '@' + m[1] + m[2];
+      frag.appendChild(span);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    ed.appendChild(frag);
+    props.value = text;
+  }
+
+  // 造 40 行，引用分散在头尾
+  const lines = [];
+  for (let i = 1; i <= 40; i++) {
+    if (i === 2) lines.push(i + '. 开头就有 @图片5 在这里。');
+    else if (i === 20) lines.push(i + '. 中间放一个 @图片3 引用。');
+    else if (i === 39) lines.push(i + '. 快到结尾了 @图片4 在这。');
+    else if (i === 40) lines.push(i + '. 最后一行 @图片2 收尾。');
+    else lines.push(i + '. ' + '这是一段用来把面板撑高的普通文字，方便测试滚动与高亮。');
+  }
+  const base = lines.join('\n');
+  render(base);
+  ed['__reactFiber$fake'] = { memoizedProps: props, return: null };
+
+  window.__fake = {
+    ed, props, base, scroller, render,
+    scrollTop: () => scroller.scrollTop,
+    flashBox() {
+      const b = document.querySelector('.tyq-pin');
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      const s = scroller.getBoundingClientRect();
+      return { box: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)], scroller: [Math.round(s.left), Math.round(s.top), Math.round(s.width), Math.round(s.height)] };
+    },
+    reset() { render(base); scroller.scrollTop = 0; },
+  };
+</script>
+</body>
+</html>

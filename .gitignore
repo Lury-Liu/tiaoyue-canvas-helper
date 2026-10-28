@@ -1,10 +1,27 @@
-ty_probe/
 node_modules/
 *.zip
-ISSUES.md
-panel-*.png
-tiaoyue-guide-preview.png
 .DS_Store
 Thumbs.db
 .workbuddy/
 ty.html
+panel-*.png
+tiaoyue-guide-preview.png
+
+# ty_probe：只入库可复用的模拟页与验证脚本。
+# 真实提示词文本、抓取的站点源码、真机截图、一次性调试脚本不入库。
+ty_probe/*
+!ty_probe/fake.html
+!ty_probe/fake2.html
+!ty_probe/fake3.html
+!ty_probe/replica.html
+!ty_probe/verify.mjs
+!ty_probe/verify2.mjs
+!ty_probe/verify3.mjs
+!ty_probe/rtest.mjs
+!ty_probe/rtest2.mjs
+!ty_probe/rtest3.mjs
+!ty_probe/lib.mjs
+!ty_probe/cdp.mjs
+!ty_probe/shot.mjs
+!ty_probe/scrolltest.mjs
+!ty_probe/scrolltest2.mjs

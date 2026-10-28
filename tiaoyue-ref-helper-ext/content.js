@@ -1,5 +1,5 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.6.0。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.8.0。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
@@ -10,11 +10,16 @@
   if (window.__TYQ_LOADED__) {
     if (!window.__TYQ_FORCE_ONCE) return;
     window.__TYQ_FORCE_ONCE = false;
+    try { if (window.__TYQ_DISPOSE__) window.__TYQ_DISPOSE__(); } catch (e) { /* 忽略 */ }
     document.querySelectorAll('.tyq-launch,.tyq-panel,.tyq-guide-mask,.tyq-pin,#tyq-style').forEach((n) => n.remove());
     delete window.__TYQ;
   } else {
     window.__TYQ_LOADED__ = true;
   }
+
+  // 热更新后旧实例的 document 监听仍然存在：统一用 alive 关掉，避免双份响应 / 重复 toast
+  let alive = true;
+  window.__TYQ_DISPOSE__ = () => { alive = false; };
 
   /* ------------------------------------------------------------------ *
    * 0. 基础：无界微前端 DOM 访问
@@ -22,12 +27,18 @@
   const HOST = () => document.querySelector('wujie-app');
   const SHADOW = () => (HOST() && HOST().shadowRoot) || null;
   const EDITOR_SEL = '[class*="_promptEditor_"]';
+  const CANVAS_ROUTE = '/aigc/canvas/';   // 画布路由前缀：启停与 open() 守卫共用
 
   let lastEditor = null;
 
   function editors() {
     const r = SHADOW();
     return r ? Array.from(r.querySelectorAll(EDITOR_SEL)) : [];
+  }
+
+  function isVisibleEditor(e) {
+    const r = e.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden';
   }
 
   function activeEditor() {
@@ -38,8 +49,13 @@
     const all = editors();
     const hit = all.find((e) => e === ae || e.contains(ae));
     if (hit) { lastEditor = hit; return hit; }
-    if (lastEditor && lastEditor.isConnected) return lastEditor;
-    return all[0] || null;
+
+    // 多个节点各有一份编辑器时，all[0] 很可能是隐藏的旧节点：
+    // 优先上一次的编辑器（且可见），否则取第一个可见的
+    const vis = all.filter(isVisibleEditor);
+    if (vis.length) return vis.includes(lastEditor) ? lastEditor : vis[0];
+    // 全都不可见：多半是节点正在切换，宁可返回 null 让面板显示提示，也不要渲染旧节点数据
+    return null;
   }
 
   // 找到 CanvasRichInput 组件的 fiber（组件名在压缩后仍保留）
@@ -131,39 +147,18 @@
     const idxOf = (node) => Array.prototype.indexOf.call(node.parentNode.childNodes, node);
 
     try {
+      const clampOff = (n, off) => {
+        const max = n.nodeType === 3 ? (n.nodeValue || '').length : n.childNodes.length;
+        return Math.max(0, Math.min(off, max));
+      };
       const s = locate(start, false), e = locate(end, true);
       const r = document.createRange();
-      r.setStart(s.node, Math.min(s.offset, (s.node.textContent || '').length || 0));
-      r.setEnd(e.node, Math.min(e.offset, (e.node.textContent || '').length || 0));
+      r.setStart(s.node, clampOff(s.node, s.offset));
+      r.setEnd(e.node, clampOff(e.node, e.offset));
       return r;
     } catch (err) {
       return null;
     }
-  }
-
-  // 返回光标偏移；无法确定时返回 null（**不要**用正文长度冒充）
-  function caretOffset(ed) {
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount) return null;
-    const r = sel.getRangeAt(0);
-    if (!ed.contains(r.startContainer)) return null;
-    const pre = document.createRange();
-    pre.selectNodeContents(ed);
-    pre.setEnd(r.startContainer, r.startOffset);
-    const frag = pre.cloneContents();
-    const tmp = document.createElement('div');
-    tmp.appendChild(frag);
-    // 碎片里芯片仍是元素，用统一的序列化规则
-    return serialize(tmp).length;
-  }
-
-  function setCaret(ed, offset) {
-    const r = rangeFromOffset(ed, offset, offset);
-    if (!r) return;
-    try { ed.focus({ preventScroll: true }); } catch (e) { ed.focus(); }   // 别让浏览器把面板/画布滚走
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(r);
   }
 
   /* ------------------------------------------------------------------ *
@@ -226,15 +221,6 @@
     return { text: out, stats };
   }
 
-  // 画布上所有节点的名字（用于「名字在画布上但没连进来」的提示）
-  function canvasNodeNames() {
-    const r = SHADOW();
-    if (!r) return [];
-    return Array.from(r.querySelectorAll('.canvas-node-container'))
-      .map((n) => ((n.innerText || '').trim().split('\n')[0] || '').trim())
-      .filter(Boolean);
-  }
-
   // 扫描所有可转换的名字（长名优先、去重叠），按出现次数倒序
   function scanMatches(text, index) {
     const entries = nameMap(index);
@@ -284,11 +270,7 @@
   const HIST = { key: '', list: [], idx: -1 };
 
   function histKey(a) {
-    const p = a.props || {};
-    const nid = p.nodeId || p.nodeUuid || (p.node && p.node.id) || '';
-    if (nid) return 'n:' + nid;
-    const ids = (a.refs || []).map((r) => r.id || r.assetFileId || '').join(',');
-    return ids ? 'r:' + ids : 'e:' + elId(a.el);
+    return nodeKey(a);
   }
 
   function syncHistory(a) {
@@ -308,20 +290,16 @@
     HIST.idx = HIST.list.length - 1;
   }
 
-  function afterWrite() {
-    setTimeout(() => { refreshBadge(); if (isOpen()) render(); }, 120);
-  }
-
   function writeText(text, label) {
     const a = api();
     if (!a) { toast('未找到输入框：请先双击节点'); return false; }
     syncHistory(a);
     const cur = serialize(a.el);
     if (cur === text) return false;
-    suppressSyncUntil = Date.now() + 350;   // 应用重渲染期间的选区变化不认
+    if (a.maxLength && text.length > a.maxLength) { toast('超出长度上限'); return false; }
+    if (!HIST.list.length) pushHistory(cur, '初始内容');   // 空内容也留档，保证第一次写回可撤销
     if (!a.set(text)) { toast('写入失败：请重新双击节点后再试'); return false; }
     pushHistory(text, label || '编辑');
-    afterWrite();
     return true;
   }
 
@@ -330,10 +308,9 @@
     if (!a) return;
     syncHistory(a);
     if (i < 0 || i >= HIST.list.length || i === HIST.idx) return;
-    if (!a.set(HIST.list[i].text)) return;
+    if (!a.set(HIST.list[i].text)) { toast('写入失败：请重新双击节点后再试'); return; }
     HIST.idx = i;
     toast('已回到：' + HIST.list[i].label);
-    afterWrite();
   }
 
   const undo = () => goToHistory(HIST.idx - 1);
@@ -377,11 +354,6 @@
   .tyq-btn.primary{background:#2563eb;border-color:#2563eb;color:#fff}
   .tyq-btn.primary:hover{background:#1d4ed8}
   .tyq-hint{color:#9ca3af;font-size:11.5px;margin-top:8px;line-height:1.5}
-  .tyq-list{margin-top:8px;max-height:38vh;overflow:auto}
-  .tyq-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:8px;cursor:pointer}
-  .tyq-item:hover,.tyq-item.sel{background:rgba(255,255,255,.07)}
-  .tyq-thumb{width:30px;height:30px;border-radius:6px;object-fit:cover;background:#000;flex:none}
-  .tyq-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
   .tyq-token{flex:none;font-size:11px;color:#93c5fd;background:rgba(59,130,246,.15);border-radius:6px;padding:1px 6px}
   .tyq-empty{color:#6b7280;font-size:12px;padding:14px 4px;text-align:center}
   .tyq-count{color:#a3e635;font-size:12px}
@@ -412,17 +384,10 @@
   .tyq-citem:hover{background:rgba(96,165,250,.16);border-color:rgba(96,165,250,.5)}
   .tyq-cthumb{width:16px;height:16px;border-radius:3px;object-fit:cover;background:#000;flex:none}
   .tyq-cname{max-width:118px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d7dbe2}
-  .tyq-cite-badge{flex:none;font-size:10px;color:#86efac;background:rgba(34,197,94,.14);border:1px solid rgba(34,197,94,.35);
-    border-radius:5px;padding:0 4px;line-height:1.5}
-  .tyq-flash{position:fixed;pointer-events:none;border:2px solid #60a5fa;border-radius:5px;z-index:2147483004;
-    box-shadow:0 0 0 3px rgba(96,165,250,.22),0 0 18px rgba(96,165,250,.6);opacity:.95;transition:opacity .35s}
   .tyq-pin{position:fixed;pointer-events:none;border:2px solid #60a5fa;border-radius:5px;z-index:2147483004;
     box-shadow:0 0 0 3px rgba(96,165,250,.25),0 0 18px rgba(96,165,250,.6);display:none}
   /* 隐藏画布自带的"跳跃AI"悬浮助手（gc-float 触发钮 + 面板），只保留本插件 */
   .gc-float{display:none!important}
-  .tyq-flash.ins{border-color:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.25),0 0 18px rgba(52,211,153,.65)}
-  .tyq-flash.caret{width:2px!important;border:0;background:#60a5fa;border-radius:2px;
-    box-shadow:0 0 8px rgba(96,165,250,.85);opacity:.85}
   .tyq-help{flex:none;cursor:pointer;color:#9ca3af;width:18px;height:18px;border-radius:9px;
     border:1px solid rgba(255,255,255,.22);text-align:center;font:600 12px/17px system-ui}
   .tyq-help:hover{color:#fff;border-color:rgba(255,255,255,.6)}
@@ -466,7 +431,6 @@
   }
 
   let ui = null;
-  let savedCaret = null;   // null = 还没记录到有效插入点
   let activeTab = 'asset';
   let panelPos = null;     // 手动拖动后的面板位置；null = 跟随悬浮球
 
@@ -503,7 +467,8 @@
       launch.style.right = 'auto';
       launch.style.bottom = 'auto';
     }
-    activeTab = LS.get(TAB_KEY, activeTab) || 'asset';
+    const savedTab = LS.get(TAB_KEY, activeTab);
+    activeTab = ['asset', 'find', 'hist'].includes(savedTab) ? savedTab : 'asset';
 
     // 拖动悬浮球：位移超过 4px 才算拖动，否则当作点击
     let drag = null;
@@ -537,9 +502,9 @@
     launch.addEventListener('pointercancel', () => { drag = null; launch.classList.remove('dragging'); });
 
     panel.querySelector('[data-act="close"]').addEventListener('click', () => close());
-    panel.querySelector('[data-act="help"]').addEventListener('click', () => showGuide(true));
+    panel.querySelector('[data-act="help"]').addEventListener('click', () => showGuide());
     panel.querySelectorAll('.tyq-tab').forEach((t) =>
-      t.addEventListener('click', () => { activeTab = t.dataset.tab; LS.set(TAB_KEY, activeTab); clearPin(); render(); })
+      t.addEventListener('click', () => { activeTab = t.dataset.tab; LS.set(TAB_KEY, activeTab); if (activeTab === 'hist') captureManualEdit(); clearPin(); render(); })
     );
 
     // 面板拖动：抓标题栏；位置记本地，双击标题栏复位成「跟随悬浮球」
@@ -586,6 +551,7 @@
     });
 
     refreshBadge();
+    watchEditorContent(activeEditor());
   }
 
   // 面板默认贴着悬浮球摆；手动拖过之后就固定在拖到的位置
@@ -633,13 +599,13 @@
             <li><b>双击画布上的节点</b>，底部弹出提示词框（输入框在「全部参考」上方）。</li>
             <li>点右下角 <b>＠</b> 或按 <b>Alt+A</b> 打开面板。<b>面板和悬浮球都能拖动</b>，双击面板标题栏回到自动跟随。</li>
             <li>勾选要转的素材 → <b>预览结果</b> 核对 → <b>转换选中项</b> 写回；按 <b>Alt+Z</b> 随时撤销。</li>
-            <li>点素材即插入到当前光标处（光标不在提示词里则追加到末尾），<b>Alt+Z</b> 撤销；<b>Ctrl+F</b> 查找替换。</li>
+            <li>勾选 / 预览 / 转换后，<b>Alt+Z</b> 可撤销；<b>Ctrl+F</b> 查找替换。</li>
           </ol>
           <div class="tyq-gwarn">
             <div class="tyq-gwarn-t">⚠ 先看这条：素材名不一定会保留</div>
             <p>只有通过画布 <b>「添加资源 → 上传」</b>（或节点上的上传入口）进来的素材，才会<b>保留原始文件名</b>，插件才能按名字找到它。</p>
             <p>从其他节点、网页或桌面<b>直接拖入 / 复制粘贴</b>进来的素材，名字会统一变成 <code>image.png</code> 这类默认名 —— 这时<b>按名字转换会失效或指错素材</b>。</p>
-            <p>遇到这种情况：重新用「上传」导入一次，或者在面板下方的素材列表里手动点选插入（列表按 @图片N 顺序，不依赖文件名）。</p>
+            <p>遇到这种情况：重新用「上传」导入一次，让原始文件名保留下来。</p>
           </div>
           <div class="tyq-gsec">两个按钮的区别</div>
           <ul class="tyq-gsteps">
@@ -673,13 +639,9 @@
   function isOpen() { return ui && ui.panel.classList.contains('open'); }
 
   function open(tab) {
+    // 已离开画布路由时，残留的快捷键/悬浮球点击不应再重建面板
+    if (!location.pathname.includes(CANVAS_ROUTE)) return;
     if (!ui) buildUI();
-    const ed = activeEditor();
-    if (ed) {
-      const c = caretOffset(ed);
-      if (c != null) savedCaret = c;      // 拿不到就沿用上次记下的位置，绝不猜“末尾”
-    }
-    searchTerm = '';                      // 每次打开面板清掉上次的搜索过滤
     if (tab) { activeTab = tab; LS.set(TAB_KEY, tab); }
     ui.panel.classList.add('open');
     render();
@@ -719,23 +681,25 @@
   }
 
   /* ---------------- 面板渲染 ---------------- */
-  let searchTerm = '';
   let unchecked = new Set();   // 被取消勾选的素材 token
+  let uncheckedNodeKey = '';   // 勾选状态所属节点，切节点时清空
   let previewOn = false;
-  let selIdx = 0;
-  let shownItems = [];
   let jumpState = { token: '', i: 0 };
   let lastRenderKey = '';      // 当前面板内容对应的「编辑器 + 素材」指纹
+
+  function nodeKey(a) {
+    const p = (a && a.props) || {};
+    const nid = p.nodeId || p.nodeUuid || (p.node && p.node.id) || '';
+    return nid ? 'n:' + nid : 'e:' + elId(a.el);
+  }
 
   // 面板内容指纹：节点 id + 参考素材（id/名字）。切节点、增删素材都会变。
   function editorKey(a) {
     if (!a) return '';
-    const p = a.props || {};
-    const nid = p.nodeId || p.nodeUuid || (p.node && p.node.id) || '';
     const sig = (a.refs || [])
       .map((r) => (r.id || r.assetFileId || r.assetFileUuid || '') + ':' + (r.assetName || r.nodeTitle || r.name || ''))
       .join('|');
-    return (nid ? 'n:' + nid : 'e:' + elId(a.el)) + '#' + (a.refs || []).length + '#' + sig;
+    return nodeKey(a) + '#' + (a.refs || []).length + '#' + sig;
   }
 
   function render() {
@@ -752,6 +716,8 @@
       return;
     }
     lastRenderKey = editorKey(a);
+    const nk = nodeKey(a);
+    if (nk !== uncheckedNodeKey) { uncheckedNodeKey = nk; unchecked.clear(); previewOn = false; findState.last = -1; }
     const index = buildIndex(a.refs);
     if (activeTab === 'asset') renderAsset(body, a, index);
     else if (activeTab === 'hist') renderHistory(body, a);
@@ -759,12 +725,20 @@
     placePanel();
   }
 
+  // 勾选 / 预览这类面板内重绘：保留滚动位置，别把列表弹回顶部
+  function rerenderKeepScroll() {
+    if (!ui) return;
+    const st = ui.body.scrollTop;
+    render();
+    ui.body.scrollTop = st;
+  }
+
   // 面板开着时切到别的节点/输入框，立刻换成那个节点的素材列表。
   // 原来只在「重新打开面板」时渲染，所以会出现列表不刷新、要关掉再开的情况。
   function syncPanelToEditor() {
     if (!ui || !isOpen() || activeTab !== 'asset') return;
     const a = api();
-    if (!a) return;
+    if (!a) { if (lastRenderKey) render(); return; }
     if (editorKey(a) === lastRenderKey) return;
     const ae = document.activeElement;
     if (ae && ui.panel.contains(ae)) return;   // 正在面板里搜索/输入，不打断
@@ -790,7 +764,6 @@
 
     // —— 已引用素材：正文里已经存在的 @图片N（不管名字还在不在） ——
     const cited = scanCitations(text, index);
-    const citedMap = new Map(cited.map((c) => [c.token, c.count]));
     if (cited.length) {
       const citedTotal = cited.reduce((s, c) => s + c.count, 0);
       body.appendChild(el('div', 'tyq-sub', `已引用素材（${cited.length} 个 · ${citedTotal} 处）`));
@@ -825,7 +798,7 @@
       code.textContent = dupNames[0][0];
       w.appendChild(document.createTextNode(`有 ${dupNames.length} 组素材同名（如 `));
       w.appendChild(code);
-      w.appendChild(document.createTextNode(` 对应 ${dupNames[0][1].join('、')}）：多半不是经「上传」导入，原名已丢；按名字转换会指错，请改用下方列表手动插入。`));
+      w.appendChild(document.createTextNode(` 对应 ${dupNames[0][1].join('、')}）：多半不是经「上传」导入，原名已丢；按名字转换会指错，建议重新上传一次保留原名。`));
       body.appendChild(w);
     }
 
@@ -840,7 +813,7 @@
         cb.title = '取消勾选则跳过这个素材';
         cb.addEventListener('change', () => {
           if (cb.checked) unchecked.delete(m.token); else unchecked.add(m.token);
-          render();
+          rerenderKeepScroll();
         });
         row.appendChild(cb);
         const nm = el('span', 'tyq-mname', m.label);
@@ -867,7 +840,6 @@
     runBtn.disabled = !matches.length;
     row2.appendChild(runBtn);
     body.appendChild(row2);
-    body.appendChild(el('div', 'tyq-hint', '点素材即插入到当前光标处；光标不在提示词里时追加到末尾。插入后 Alt+Z 可撤销。'));
     body.appendChild(el('div', 'tyq-hint', '「仅改写选中的文字」= 只处理你在提示词里手动选中的那一小段。'));
 
     if (previewOn) {
@@ -879,66 +851,7 @@
       body.appendChild(el('div', 'tyq-hint', '预览：上面是写回后的正文，@图片N 即引用。确认无误再点「转换选中项」。'));
     }
 
-    // —— 插入素材 ——
-    body.appendChild(el('div', 'tyq-sub', '插入引用（按光标位置）'));
-    const search = el('input', 'tyq-input');
-    search.placeholder = '搜索素材名字，↑↓ 选择，回车插入';
-    search.value = searchTerm;
-    body.appendChild(search);
-
-    const list = el('div', 'tyq-list');
-    body.appendChild(list);
-
-    shownItems = [];
-    const draw = () => {
-      list.innerHTML = '';
-      const q = searchTerm.trim().toLowerCase();
-      shownItems = index.filter((x) => !q || x.name.toLowerCase().includes(q) || x.bare.toLowerCase().includes(q));
-      if (!shownItems.length) {
-        list.appendChild(el('div', 'tyq-empty', index.length ? '无匹配素材' : '当前节点没有参考素材'));
-        // 名字在画布上存在、但没接入当前节点的参考图时给出提示
-        const onCanvas = canvasNodeNames().filter((n) => !q || n.toLowerCase().includes(q));
-        if (onCanvas.length) {
-          list.appendChild(el('div', 'tyq-hint', '画布上有同名素材但未接入本节点：' + onCanvas.slice(0, 4).join('、') + '（先把它连线/拖成本节点的参考图）'));
-        }
-        return;
-      }
-      if (selIdx > shownItems.length - 1) selIdx = shownItems.length - 1;
-      shownItems.forEach((it, i) => {
-        const rowEl = el('div', 'tyq-item' + (i === selIdx ? ' sel' : ''));
-        if (it.cover) {
-          const img = el('img', 'tyq-thumb');
-          img.src = it.cover; img.loading = 'lazy';
-          rowEl.appendChild(img);
-        }
-        rowEl.appendChild(el('div', 'tyq-name', it.name));
-        if (citedMap.has(it.token)) {
-          rowEl.appendChild(el('span', 'tyq-cite-badge', citedMap.get(it.token) > 1 ? `已引用 ×${citedMap.get(it.token)}` : '已引用'));
-        }
-        rowEl.appendChild(el('div', 'tyq-token', it.token));
-        rowEl.addEventListener('click', () => insertToken(it));
-        list.appendChild(rowEl);
-      });
-    };
-    draw();
-
-    const moveSel = (d) => {
-      if (!shownItems.length) return;
-      selIdx = (selIdx + d + shownItems.length) % shownItems.length;
-      const rows = list.querySelectorAll('.tyq-item');
-      rows.forEach((r, i) => r.classList.toggle('sel', i === selIdx));
-      if (rows[selIdx]) rows[selIdx].scrollIntoView({ block: 'nearest' });
-    };
-
-    search.addEventListener('input', () => { searchTerm = search.value; selIdx = 0; draw(); });
-    search.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'ArrowDown') { e.preventDefault(); moveSel(1); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); moveSel(-1); }
-      else if (e.key === 'Enter') { e.preventDefault(); if (shownItems[selIdx]) insertToken(shownItems[selIdx]); }
-    });
-
-    prevBtn.addEventListener('click', () => { previewOn = !previewOn; render(); });
+    prevBtn.addEventListener('click', () => { previewOn = !previewOn; rerenderKeepScroll(); });
 
     convertBtn.addEventListener('click', () => {
       const { text: out, stats } = convertAll(text, index, allowedNames(index));
@@ -972,27 +885,6 @@
     return s;
   }
 
-  // 点名字 -> 选中原文并滚动到可见（重复点击跳到下一处）
-  function jumpTo(m) {
-    const a = api();
-    if (!a) return;
-    if (jumpState.token !== m.token) jumpState = { token: m.token, i: 0 };
-    const text = serialize(a.el);
-    const positions = [];
-    let i = text.indexOf(m.label);
-    while (i !== -1) { positions.push(i); i = text.indexOf(m.label, i + m.label.length); }
-    if (!positions.length) { toast('原文里找不到这个名字了'); return; }
-    const at = positions[jumpState.i % positions.length];
-    jumpState.i++;
-    const r = rangeFromOffset(a.el, at, at + m.label.length);
-    if (!r) return;
-    suppressSyncUntil = Date.now() + 300;   // 定位只是“看”，不要把插入点挪过来
-    selectRange(a.el, r);
-    scrollRangeIntoView(r);
-    setPin(r);
-    toast(`第 ${((jumpState.i - 1) % positions.length) + 1}/${positions.length} 处`);
-  }
-
   // 正文里已经出现的 @图片N（按出现顺序）
   function scanCitations(text, index) {
     const map = new Map(index.map((x) => [x.token, x]));
@@ -1023,6 +915,14 @@
     try {
       const cs = getComputedStyle(el);
       return /(auto|scroll|overlay)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 4;
+    } catch (e) { return false; }
+  }
+
+  // 会裁掉内容的容器（overflow 非 visible）：高亮框要按它裁剪，不只是可滚动容器
+  function isClipper(el) {
+    try {
+      const cs = getComputedStyle(el);
+      return /(auto|scroll|overlay|hidden)/.test(cs.overflowX) || /(auto|scroll|overlay|hidden)/.test(cs.overflowY);
     } catch (e) { return false; }
   }
 
@@ -1067,12 +967,12 @@
       const bottomLimit = Math.min(clip.bottom, vh) - 12;
       if (rect.top >= topLimit && rect.bottom <= bottomLimit) return;
 
-      for (const el of scrollers) {
-        const cr = el.getBoundingClientRect();
-        const delta = (rect.top - cr.top) - el.clientHeight / 3;
-        const next = Math.max(0, Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + delta));
-        if (Math.abs(next - el.scrollTop) > 1) {
-          el.scrollTop = next;
+      for (const sc of scrollers) {
+        const cr = sc.getBoundingClientRect();
+        const delta = (rect.top - cr.top) - sc.clientHeight / 3;
+        const next = Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, sc.scrollTop + delta));
+        if (Math.abs(next - sc.scrollTop) > 1) {
+          sc.scrollTop = next;
           rect = rangeRect(r);            // 每滚一层重新量
         }
         if (rect && rect.top >= cr.top + 12 && rect.bottom <= cr.bottom - 12) break;
@@ -1088,17 +988,37 @@
   }
 
   // 高亮框逐帧跟随目标，滚动或重排都不会“飞走”
-  let pinBox = null, pinRaf = 0;
-  let flashBox = null, flashRaf = 0;
+  let pinBox = null;
+
+  // 目标的可见裁剪区：编辑器本体 + 各级滚动容器。文本滚出面板后框要一起消失，
+  // 否则会浮在面板外（截图里跑到视频上的那个框）。所有裁剪区都要满足才算可见。
+  function pinClipRects(r) {
+    const out = [];
+    let n = r.startContainer && (r.startContainer.nodeType === 3 ? r.startContainer.parentElement : r.startContainer);
+    for (let i = 0; i < 8 && n && n !== document.body; i++) {
+      if (n.nodeType === 1 && (n.matches(EDITOR_SEL) || isClipper(n))) {
+        const cr = n.getBoundingClientRect();
+        if (cr.height > 0) out.push(cr);
+      }
+      n = n.parentElement;
+    }
+    return out;
+  }
 
   function followLoop(box, r, onLost) {
-    let miss = 0;
+    let miss = 0;        // 连续取不到矩形 = 目标已被重渲染拆除
+    let hiddenAt = 0;    // 滚出可视区的起始时刻；藏超 5s 就撤掉，别空转 rAF
     const tick = () => {
       if (!box.isConnected) return;
-      let rect = null;
-      try { rect = r.getBoundingClientRect(); } catch (e) { rect = null; }
-      if (rect && (rect.width || rect.height)) {
-        miss = 0;
+      const rect = r.getBoundingClientRect();
+      const hasRect = !!(rect && (rect.width || rect.height));
+      const clips = hasRect ? pinClipRects(r) : [];
+      const inClip = clips.every((c) => rect.bottom > c.top + 1 && rect.top < c.bottom - 1 &&
+        rect.right > c.left + 1 && rect.left < c.right - 1);
+      const inView = hasRect && rect.bottom > 0 && rect.top < window.innerHeight &&
+        rect.right > 0 && rect.left < window.innerWidth;
+      if (hasRect && inClip && inView) {
+        miss = 0; hiddenAt = 0;
         box.style.display = 'block';
         box.style.left = (rect.left - 3) + 'px';
         box.style.top = (rect.top - 3) + 'px';
@@ -1106,8 +1026,13 @@
         box.style.height = Math.max(rect.height + 6, 6) + 'px';
       } else {
         box.style.display = 'none';
-        miss++;
-        if (miss > 6) { box.remove(); if (onLost) onLost(); return; }  // 目标已被重渲染拆除
+        if (!hasRect) {
+          if (++miss > 6) { box.remove(); if (onLost) onLost(); return; }
+        } else {
+          miss = 0;
+          if (!hiddenAt) hiddenAt = performance.now();
+          else if (performance.now() - hiddenAt > 5000) { box.remove(); if (onLost) onLost(); return; }
+        }
       }
       box.__raf = requestAnimationFrame(tick);
     };
@@ -1130,62 +1055,40 @@
     if (pinBox) { cancelAnimationFrame(pinBox.__raf || 0); pinBox.remove(); pinBox = null; }
   }
 
-  // 瞬时确认高亮（插入/光标）：同样单例，旧的直接让位
-  function flashRange(r, cls) {
-    if (flashBox) { cancelAnimationFrame(flashBox.__raf || 0); flashBox.remove(); flashBox = null; }
-    try {
-      flashBox = el('div', 'tyq-flash' + (cls ? ' ' + cls : ''));
-      document.body.appendChild(flashBox);
-      const start = performance.now();
-      const tick = () => {
-        if (!flashBox || !flashBox.isConnected) return;
-        let rect = null;
-        try { rect = r.getBoundingClientRect(); } catch (e) { rect = null; }
-        if (rect && (rect.width || rect.height)) {
-          flashBox.style.display = 'block';
-          flashBox.style.left = (rect.left - 3) + 'px';
-          flashBox.style.top = (rect.top - 3) + 'px';
-          flashBox.style.width = Math.max(rect.width + 6, 6) + 'px';
-          flashBox.style.height = Math.max(rect.height + 6, 6) + 'px';
-        } else {
-          flashBox.style.display = 'none';
-        }
-        const dt = performance.now() - start;
-        if (dt > 650) flashBox.style.opacity = '0';
-        if (dt > 1150) { flashBox.remove(); flashBox = null; return; }
-        flashBox.__raf = requestAnimationFrame(tick);
-      };
-      cancelAnimationFrame(flashRaf);
-      tick();
-    } catch (e) { if (flashBox) { flashBox.remove(); flashBox = null; } }
-  }
-
-  function jumpToken(token) {
+  // 定位：找 needle 的所有出现，逐次跳转并高亮（重复点击跳下一处）
+  function jumpNeedle(needle, label) {
     const a = api();
     if (!a) return;
+    if (jumpState.token !== needle) jumpState = { token: needle, i: 0 };
     const text = serialize(a.el);
-    const needle = '@' + token;
-    if (jumpState.token !== token) jumpState = { token, i: 0 };
     const positions = [];
     let i = text.indexOf(needle);
     while (i !== -1) { positions.push(i); i = text.indexOf(needle, i + needle.length); }
-    if (!positions.length) { toast('正文里没有 ' + needle); return; }
+    if (!positions.length) { toast('正文里找不到 ' + needle); return; }
     const at = positions[jumpState.i % positions.length];
     jumpState.i++;
     const r = rangeFromOffset(a.el, at, at + needle.length);
     if (!r) return;
-    suppressSyncUntil = Date.now() + 300;   // 定位只是“看”，不要把插入点挪过来
     selectRange(a.el, r);
     scrollRangeIntoView(r);
     setPin(r);
-    toast(`${token}：第 ${((jumpState.i - 1) % positions.length) + 1}/${positions.length} 处`);
+    toast(`${label}：第 ${((jumpState.i - 1) % positions.length) + 1}/${positions.length} 处`);
   }
 
+  function jumpTo(m) { jumpNeedle(m.label, m.label); }
+  function jumpToken(token) { jumpNeedle('@' + token, token); }
   /* ---------------- 历史 ---------------- */
-  function renderHistory(body, a) {
+  // 手动改动（不经插件写回）只在切到历史页时收录，渲染本身不改档
+  function captureManualEdit() {
+    const a = api();
+    if (!a) return;
     syncHistory(a);
     const cur = serialize(a.el);
     if (HIST.idx >= 0 && HIST.list[HIST.idx] && HIST.list[HIST.idx].text !== cur) pushHistory(cur, '当前内容（手动改过）');
+  }
+
+  function renderHistory(body, a) {
+    syncHistory(a);
 
     const wrap = el('div', 'tyq-hist');
     if (!HIST.list.length) wrap.appendChild(el('div', 'tyq-empty', '还没有操作记录'));
@@ -1227,53 +1130,6 @@
       const tmp2 = document.createElement('div'); tmp2.appendChild(pre2.cloneContents());
       return { start, end: serialize(tmp2) };
     } catch (e) { return null; }
-  }
-
-  /* ---------------- 插入引用：一步到光标 ----------------
-   * 提示词编辑区上盖着应用自绘的点击捕获层，“点了哪里”拿不到可靠位置；
-   * 两段式“点位置再确认”实际用起来更别扭，已移除。
-   * 现在：点素材 = 立即插入到当前光标；光标不在编辑器里则追加到末尾。 */
-  let suppressSyncUntil = 0;      // 自己写回 / 定位后这段时间内，忽略选区反同步
-
-  function noteCaret(c) {
-    if (c == null) return;
-    savedCaret = c;
-  }
-
-  // 当前最可信的光标：编辑器持焦点时用实时选区，否则用记录值
-  function liveCaret(a) {
-    const root = SHADOW();
-    const focused = !!(root && root.activeElement && (root.activeElement === a.el || a.el.contains(root.activeElement)));
-    let caret = focused ? caretOffset(a.el) : null;
-    if (caret == null) caret = savedCaret;
-    return caret;
-  }
-
-  function insertToken(it) {
-    const a = api();
-    if (!a) { toast('未找到输入框：请先双击节点'); return; }
-    const text = serialize(a.el);
-    const val = (a.props && typeof a.props.value === 'string') ? a.props.value : '';
-    if (val && val !== text) { toast('输入框内容与提示词不同步，请先在输入框里点一下再试', 3200); return; }
-
-    let caret = liveCaret(a);
-    const anchored = caret != null;
-    if (!anchored) caret = text.length;
-    caret = Math.max(0, Math.min(caret, text.length));
-
-    const ins = '@' + it.token;
-    const out = text.slice(0, caret) + ins + text.slice(caret);
-    if (a.maxLength && out.length > a.maxLength) { toast('超出长度上限'); return; }
-    if (!writeText(out, `插入 ${it.token}`)) return;
-
-    savedCaret = caret + ins.length;
-    setTimeout(() => {
-      const ed = activeEditor();
-      if (ed) setCaret(ed, caret + ins.length);
-      const r2 = ed ? rangeFromOffset(ed, caret, caret + ins.length) : null;
-      if (r2) flashRange(r2, 'ins');
-      toast(anchored ? `已插入 ${it.token}` : `未找到光标，已追加到末尾（${it.token}）`, anchored ? 1800 : 3200);
-    }, 160);
   }
 
   /* ---------------- 查找替换 ---------------- */
@@ -1339,7 +1195,7 @@
         const s = window.getSelection();
         s.removeAllRanges(); s.addRange(range);
         const node = range.startContainer.parentElement;
-        if (node && node.scrollIntoView) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        if (node && node.scrollIntoView) node.scrollIntoView({ block: 'center', behavior: 'auto' });
       }
     };
 
@@ -1406,6 +1262,7 @@
   }
 
   document.addEventListener('keydown', (e) => {
+    if (!alive) return;
     const ed = editorFromEvent(e);
     if (ed) lastEditor = ed;
 
@@ -1440,65 +1297,35 @@
     }
   }, true);
 
-  // 选区反同步：只在我们自己写回 / 定位后的短窗口内屏蔽，其余放行——
-  // 应用替用户落光标（点击捕获层是它自己处理的）也能进 savedCaret
-  document.addEventListener('selectionchange', () => {
-    const ed = activeEditor();
+  // 焦点进编辑器 = 可能切了节点：记住它、订阅内容变化，并让面板跟上
+  //（focusin 穿透 shadow DOM，比坐标猜测可靠）
+  document.addEventListener('focusin', (e) => {
+    if (!alive) return;
+    const ed = editorFromEvent(e);
     if (!ed) return;
     lastEditor = ed;
-    if (Date.now() < suppressSyncUntil) return;
-    const sel = window.getSelection();
-    if (sel && sel.rangeCount && ed.contains(sel.getRangeAt(0).startContainer)) {
-      noteCaret(caretOffset(ed));
-    }
-  });
-
-  // 提示词编辑区上盖着一层点击捕获层：事件路径里没有编辑器，但坐标在编辑器矩形内也算
-  function editorFromPoint(x, y) {
-    for (const ed of editors()) {
-      const r = ed.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return ed;
-    }
-    return null;
-  }
-
-  // 用户操作时记一次插入点；再补两次延迟读取——
-  // 应用是在 click 之后才把光标放好的，鼠标抬起时读到的还是旧位置。
-  ['mousedown', 'mouseup', 'click', 'keyup', 'input', 'focusin'].forEach((t) => {
-    document.addEventListener(t, (e) => {
-      let ed = editorFromEvent(e);
-      if (!ed && typeof e.clientX === 'number' && typeof e.clientY === 'number') ed = editorFromPoint(e.clientX, e.clientY);
-      if (!ed) return;
-      lastEditor = ed;
-      noteCaret(caretOffset(ed));
-      if (t === 'focusin' || t === 'click') setTimeout(syncPanelToEditor, 80);
-      [60, 200].forEach((delay, k) => setTimeout(() => {
-        const cur = lastEditor;
-        if (!cur || !cur.isConnected) return;
-        if (Date.now() < suppressSyncUntil) return;
-        const c2 = caretOffset(cur);
-        if (c2 == null) return;
-        noteCaret(c2);
-        if (k === 1 && isOpen() && (t === 'click' || t === 'keyup')) {
-          const r = rangeFromOffset(cur, c2, c2);
-          if (r) flashRange(r, 'caret');   // 蓝色细条 = 已记住的插入点
-        }
-      }, delay));
-    }, true);
-  });
-
-  // 焦点离开编辑器之前先记一次（点搜索框/面板/画布都不会再丢插入点）
-  document.addEventListener('focusout', (e) => {
-    const ed = editorFromEvent(e) || (e.target && e.target.nodeType === 1 && e.target.matches && e.target.matches(EDITOR_SEL) ? e.target : null);
-    if (!ed) return;
-    lastEditor = ed;
-    if (Date.now() < suppressSyncUntil) return;
-    noteCaret(caretOffset(ed));
+    watchEditorContent(ed);
+    setTimeout(syncPanelToEditor, 80);
   }, true);
 
-  // 页面切换节点/输入后刷新角标
-  setInterval(() => { if (ui) { refreshBadge(); syncPanelToEditor(); } }, 400);
-  window.addEventListener('resize', () => placePanel());
+  // 内容变化走 MutationObserver（事件驱动），不再轮询 serialize
+  let contentMO = null, moEditor = null, moTimer = 0;
+  function watchEditorContent(ed) {
+    if (!ed || ed === moEditor) return;
+    if (contentMO) contentMO.disconnect();
+    moEditor = ed;
+    contentMO = new MutationObserver(() => {
+      clearTimeout(moTimer);
+      moTimer = setTimeout(() => {
+        if (!alive || !ui) return;
+        refreshBadge();
+        if (isOpen() && activeTab !== 'find') rerenderKeepScroll();
+      }, 250);
+    });
+    contentMO.observe(ed, { childList: true, characterData: true, subtree: true });
+  }
+
+  window.addEventListener('resize', () => { if (alive) placePanel(); });
 
   /* ------------------------------------------------------------------ *
    * 5. 启动
@@ -1507,7 +1334,6 @@
    * 从项目列表等页面 SPA 跳转到画布时不会刷新页面，content script 不会重新注入，
    * 所以必须：1) manifest 匹配全站 2) 脚本内部按路由 /aigc/canvas/ 自行启停，
    * 并监听 pushState / popstate。 */
-  const CANVAS_ROUTE = '/aigc/canvas/';
   let bootTimer = 0;
   let started = false;
 
@@ -1516,6 +1342,9 @@
     started = false;
     clearInterval(bootTimer);
     clearPin();
+    if (contentMO) { contentMO.disconnect(); contentMO = null; }
+    moEditor = null;
+    clearTimeout(moTimer);
     if (ui) { ui.launch.remove(); ui.panel.remove(); ui = null; }
   }
 
@@ -1538,18 +1367,17 @@
   }
 
   const _push = history.pushState, _replace = history.replaceState;
-  history.pushState = function () { const r = _push.apply(this, arguments); setTimeout(onRoute, 0); return r; };
-  history.replaceState = function () { const r = _replace.apply(this, arguments); setTimeout(onRoute, 0); return r; };
-  window.addEventListener('popstate', () => setTimeout(onRoute, 0));
-  window.addEventListener('hashchange', () => setTimeout(onRoute, 0));
+  history.pushState = function () { const r = _push.apply(this, arguments); if (alive) setTimeout(onRoute, 0); return r; };
+  history.replaceState = function () { const r = _replace.apply(this, arguments); if (alive) setTimeout(onRoute, 0); return r; };
+  window.addEventListener('popstate', () => { if (alive) setTimeout(onRoute, 0); });
+  window.addEventListener('hashchange', () => { if (alive) setTimeout(onRoute, 0); });
   onRoute();
 
   window.__TYQ = {
     open, close, toggle, serialize, api, activeEditor, buildIndex, convertAll,
-    countMatches, scanMatches, caretOffset, writeText, undo, redo, goToHistory,
-    HIST, placePanel, jumpTo, jumpToken, scanCitations, insertToken, flashRange,
+    countMatches, scanMatches, writeText, undo, redo, goToHistory,
+    HIST, placePanel, jumpTo, jumpToken, scanCitations,
     showGuide, maybeShowGuide, LS, GUIDE_KEY,
-    get savedCaret() { return savedCaret; },
     get panelPos() { return panelPos; },
   };
 })();

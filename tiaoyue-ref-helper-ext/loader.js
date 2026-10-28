@@ -8,7 +8,7 @@
  *  - 检查频率：每 CHECK_INTERVAL_MS 最多一次，避免每次刷新都打网络。
  *
  * 发布流程（主机方）：
- *  1. node tools/build.mjs <新版本号>   ← 重新生成 content.js + version.json
+ *  1. node tools/build.js <新版本号>   ← 重新生成 content.js + version.json
  *  2. git push
  *  其他机器：无需任何操作，1 小时内自动更新（或重开页面立即生效）。
  */
