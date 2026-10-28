@@ -1,5 +1,5 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.5.2。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.6.0。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
@@ -10,7 +10,7 @@
   if (window.__TYQ_LOADED__) {
     if (!window.__TYQ_FORCE_ONCE) return;
     window.__TYQ_FORCE_ONCE = false;
-    document.querySelectorAll('.tyq-launch,.tyq-panel,.tyq-guide-mask,.tyq-pin,.tyq-pmark,#tyq-style').forEach((n) => n.remove());
+    document.querySelectorAll('.tyq-launch,.tyq-panel,.tyq-guide-mask,.tyq-pin,#tyq-style').forEach((n) => n.remove());
     delete window.__TYQ;
   } else {
     window.__TYQ_LOADED__ = true;
@@ -423,12 +423,6 @@
   .tyq-flash.ins{border-color:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.25),0 0 18px rgba(52,211,153,.65)}
   .tyq-flash.caret{width:2px!important;border:0;background:#60a5fa;border-radius:2px;
     box-shadow:0 0 8px rgba(96,165,250,.85);opacity:.85}
-  .tyq-pmark{position:fixed;left:0;top:0;z-index:2147483004;pointer-events:none}
-  .tyq-pmark-b{position:absolute;display:none;border:2px solid #34d399;border-radius:5px;
-    box-shadow:0 0 0 3px rgba(52,211,153,.25),0 0 18px rgba(52,211,153,.6)}
-  .tyq-pmark-l{position:absolute;display:none;background:#065f46;color:#d1fae5;font:11.5px/1.4 system-ui;
-    padding:2px 8px;border-radius:6px;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.45);max-width:340px;
-    overflow:hidden;text-overflow:ellipsis}
   .tyq-help{flex:none;cursor:pointer;color:#9ca3af;width:18px;height:18px;border-radius:9px;
     border:1px solid rgba(255,255,255,.22);text-align:center;font:600 12px/17px system-ui}
   .tyq-help:hover{color:#fff;border-color:rgba(255,255,255,.6)}
@@ -639,7 +633,7 @@
             <li><b>双击画布上的节点</b>，底部弹出提示词框（输入框在「全部参考」上方）。</li>
             <li>点右下角 <b>＠</b> 或按 <b>Alt+A</b> 打开面板。<b>面板和悬浮球都能拖动</b>，双击面板标题栏回到自动跟随。</li>
             <li>勾选要转的素材 → <b>预览结果</b> 核对 → <b>转换选中项</b> 写回；按 <b>Alt+Z</b> 随时撤销。</li>
-            <li>点素材选中 → 在提示词里点一下要插入的位置（绿框会跟过去）→ <b>回车或再点一次素材</b>完成插入，<b>Esc</b> 取消；<b>Ctrl+F</b> 查找替换。</li>
+            <li>点素材即插入到当前光标处（光标不在提示词里则追加到末尾），<b>Alt+Z</b> 撤销；<b>Ctrl+F</b> 查找替换。</li>
           </ol>
           <div class="tyq-gwarn">
             <div class="tyq-gwarn-t">⚠ 先看这条：素材名不一定会保留</div>
@@ -680,7 +674,6 @@
 
   function open(tab) {
     if (!ui) buildUI();
-    if (pending) clearPending();
     const ed = activeEditor();
     if (ed) {
       const c = caretOffset(ed);
@@ -697,7 +690,6 @@
   function close() {
     if (!ui) return;
     clearPin();
-    if (pending) clearPending();
     ui.panel.classList.remove('open');
   }
 
@@ -717,10 +709,10 @@
 
   function refreshBadge() {
     if (!ui) return;
-    if (!SHADOW()) { ui.launch.style.display = 'none'; ui.panel.classList.remove('open'); if (pending) clearPending(); return; }
+    if (!SHADOW()) { ui.launch.style.display = 'none'; ui.panel.classList.remove('open'); return; }
     ui.launch.style.display = 'block';
     const a = api();
-    if (!a) { ui.badge.style.display = 'none'; if (pending) clearPending(); return; }
+    if (!a) { ui.badge.style.display = 'none'; return; }
     const n = countMatches(serialize(a.el), buildIndex(a.refs));
     ui.badge.textContent = n;
     ui.badge.style.display = n > 0 ? 'block' : 'none';
@@ -733,6 +725,18 @@
   let selIdx = 0;
   let shownItems = [];
   let jumpState = { token: '', i: 0 };
+  let lastRenderKey = '';      // 当前面板内容对应的「编辑器 + 素材」指纹
+
+  // 面板内容指纹：节点 id + 参考素材（id/名字）。切节点、增删素材都会变。
+  function editorKey(a) {
+    if (!a) return '';
+    const p = a.props || {};
+    const nid = p.nodeId || p.nodeUuid || (p.node && p.node.id) || '';
+    const sig = (a.refs || [])
+      .map((r) => (r.id || r.assetFileId || r.assetFileUuid || '') + ':' + (r.assetName || r.nodeTitle || r.name || ''))
+      .join('|');
+    return (nid ? 'n:' + nid : 'e:' + elId(a.el)) + '#' + (a.refs || []).length + '#' + sig;
+  }
 
   function render() {
     clearPin();
@@ -743,14 +747,30 @@
 
     const a = api();
     if (!a) {
+      lastRenderKey = '';
       body.appendChild(el('div', 'tyq-empty', '未找到提示词输入框：请先在画布上双击一个节点，打开底部提示词面板。'));
       return;
     }
+    lastRenderKey = editorKey(a);
     const index = buildIndex(a.refs);
     if (activeTab === 'asset') renderAsset(body, a, index);
     else if (activeTab === 'hist') renderHistory(body, a);
     else renderFind(body, a, index);
     placePanel();
+  }
+
+  // 面板开着时切到别的节点/输入框，立刻换成那个节点的素材列表。
+  // 原来只在「重新打开面板」时渲染，所以会出现列表不刷新、要关掉再开的情况。
+  function syncPanelToEditor() {
+    if (!ui || !isOpen() || activeTab !== 'asset') return;
+    const a = api();
+    if (!a) return;
+    if (editorKey(a) === lastRenderKey) return;
+    const ae = document.activeElement;
+    if (ae && ui.panel.contains(ae)) return;   // 正在面板里搜索/输入，不打断
+    const st = ui.body.scrollTop;
+    render();
+    ui.body.scrollTop = st;
   }
 
   function renderAsset(body, a, index) {
@@ -847,7 +867,7 @@
     runBtn.disabled = !matches.length;
     row2.appendChild(runBtn);
     body.appendChild(row2);
-    body.appendChild(el('div', 'tyq-hint', '插入素材是两步：点素材选中 → 在提示词里点位置 → 回车或再点一次素材。定位（点名字/引用）不会改变插入位置。'));
+    body.appendChild(el('div', 'tyq-hint', '点素材即插入到当前光标处；光标不在提示词里时追加到末尾。插入后 Alt+Z 可撤销。'));
     body.appendChild(el('div', 'tyq-hint', '「仅改写选中的文字」= 只处理你在提示词里手动选中的那一小段。'));
 
     if (previewOn) {
@@ -862,7 +882,7 @@
     // —— 插入素材 ——
     body.appendChild(el('div', 'tyq-sub', '插入引用（按光标位置）'));
     const search = el('input', 'tyq-input');
-    search.placeholder = '搜索素材名字，↑↓ 选择，回车选中，再回车插入';
+    search.placeholder = '搜索素材名字，↑↓ 选择，回车插入';
     search.value = searchTerm;
     body.appendChild(search);
 
@@ -1209,68 +1229,15 @@
     } catch (e) { return null; }
   }
 
-  /* ---------------- 两段式插入：选中 → 点正文选位置 → 确认 ----------------
-   * 之所以这么做：提示词编辑区上盖着应用自绘的点击捕获层，
-   * “点了哪里”这类信息经常拿不到，与其猜，不如让用户显式确认。 */
-  let pending = null;             // { it, token, caret }
-  let pmark = null;
-  let pmarkRaf = 0;
+  /* ---------------- 插入引用：一步到光标 ----------------
+   * 提示词编辑区上盖着应用自绘的点击捕获层，“点了哪里”拿不到可靠位置；
+   * 两段式“点位置再确认”实际用起来更别扭，已移除。
+   * 现在：点素材 = 立即插入到当前光标；光标不在编辑器里则追加到末尾。 */
   let suppressSyncUntil = 0;      // 自己写回 / 定位后这段时间内，忽略选区反同步
 
   function noteCaret(c) {
     if (c == null) return;
     savedCaret = c;
-    if (pending && pending.caret !== c) pending.caret = c;   // 标记会自己跟过去
-  }
-
-  function setPending(it, caret) {
-    pending = { it, token: it.token, caret: caret == null ? null : caret };
-    if (!pmark) {
-      pmark = el('div', 'tyq-pmark');
-      pmark.appendChild(el('span', 'tyq-pmark-l'));
-      pmark.appendChild(el('span', 'tyq-pmark-b'));
-      document.body.appendChild(pmark);
-    }
-    cancelAnimationFrame(pmarkRaf);
-    const loop = () => {
-      if (!pending || !pmark) return;
-      const label = pmark.children[0];
-      const box = pmark.children[1];
-      label.textContent = pending.caret == null
-        ? `插入 ${pending.token}：先在提示词里点一下位置`
-        : `插入 ${pending.token}：点提示词可改位置，回车 / 再点一次素材确认`;
-      let rect = null;
-      const a = api();
-      if (a && pending.caret != null) {
-        const len = serialize(a.el).length;
-        const off = Math.max(0, Math.min(pending.caret, len));
-        try {
-          const r = rangeFromOffset(a.el, off, off);
-          if (r) rect = r.getBoundingClientRect();
-        } catch (e) { /* 忽略 */ }
-      }
-      if (rect && (rect.width || rect.height)) {
-        box.style.display = 'block';
-        box.style.left = (rect.left - 3) + 'px';
-        box.style.top = (rect.top - 3) + 'px';
-        box.style.width = Math.max(rect.width + 6, 6) + 'px';
-        box.style.height = Math.max(rect.height + 6, 6) + 'px';
-        label.style.display = 'block';
-        label.style.left = Math.max(8, rect.left - 4) + 'px';
-        label.style.top = Math.max(6, rect.top - 28) + 'px';
-      } else {
-        box.style.display = 'none';
-        label.style.display = 'none';
-      }
-      pmarkRaf = requestAnimationFrame(loop);
-    };
-    loop();
-  }
-
-  function clearPending() {
-    pending = null;
-    cancelAnimationFrame(pmarkRaf);
-    if (pmark) { pmark.remove(); pmark = null; }
   }
 
   // 当前最可信的光标：编辑器持焦点时用实时选区，否则用记录值
@@ -1284,41 +1251,28 @@
 
   function insertToken(it) {
     const a = api();
-    if (!a) { toast('未找到输入框'); return; }
-    // 第一次点素材 = 选中 + 预览位置；再点同一个素材 / 回车 = 确认写入
-    if (!pending || pending.token !== it.token) {
-      const dom = serialize(a.el);
-      const val = (a.props && typeof a.props.value === 'string') ? a.props.value : '';
-      if (val && val !== dom) { toast('输入框内容与提示词不同步，请先在输入框里点一下再试', 3200); return; }
-      setPending(it, liveCaret(a));
-      toast(`已选中 ${it.token}：位置不对就点提示词，回车或再点一次插入（Esc 取消）`, 2600);
-      return;
-    }
-    doInsertToken(it, pending.caret);
-  }
-
-  function doInsertToken(it, caretRaw) {
-    const a = api();
-    if (!a) { toast('未找到输入框'); return; }
+    if (!a) { toast('未找到输入框：请先双击节点'); return; }
     const text = serialize(a.el);
     const val = (a.props && typeof a.props.value === 'string') ? a.props.value : '';
-    if (val && val !== text) { toast('输入框内容与提示词不同步，请重新选位置', 3200); return; }
-    const anchored = caretRaw != null;
-    let caret = anchored ? caretRaw : liveCaret(a);
-    if (caret == null) caret = text.length;
+    if (val && val !== text) { toast('输入框内容与提示词不同步，请先在输入框里点一下再试', 3200); return; }
+
+    let caret = liveCaret(a);
+    const anchored = caret != null;
+    if (!anchored) caret = text.length;
     caret = Math.max(0, Math.min(caret, text.length));
+
     const ins = '@' + it.token;
     const out = text.slice(0, caret) + ins + text.slice(caret);
     if (a.maxLength && out.length > a.maxLength) { toast('超出长度上限'); return; }
     if (!writeText(out, `插入 ${it.token}`)) return;
-    clearPending();
+
     savedCaret = caret + ins.length;
     setTimeout(() => {
       const ed = activeEditor();
       if (ed) setCaret(ed, caret + ins.length);
       const r2 = ed ? rangeFromOffset(ed, caret, caret + ins.length) : null;
       if (r2) flashRange(r2, 'ins');
-      toast(anchored ? `已插入 ${it.token}（第 ${caret} 字 / 共 ${text.length} 字）` : `没找到光标位置，已追加到末尾（${it.token}）`, anchored ? 2200 : 3200);
+      toast(anchored ? `已插入 ${it.token}` : `未找到光标，已追加到末尾（${it.token}）`, anchored ? 1800 : 3200);
     }, 160);
   }
 
@@ -1456,15 +1410,7 @@
     if (ed) lastEditor = ed;
 
     if (e.key === 'Escape') {
-      if (pending) clearPending();
       if (isOpen()) close();
-      return;
-    }
-    // 两段式插入的确认键：焦点不在输入控件上时，回车 = 写入
-    if (e.key === 'Enter' && pending && !(e.target && e.target.tagName && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))) {
-      e.preventDefault();
-      e.stopPropagation();
-      doInsertToken(pending.it, pending.caret);
       return;
     }
 
@@ -1525,6 +1471,7 @@
       if (!ed) return;
       lastEditor = ed;
       noteCaret(caretOffset(ed));
+      if (t === 'focusin' || t === 'click') setTimeout(syncPanelToEditor, 80);
       [60, 200].forEach((delay, k) => setTimeout(() => {
         const cur = lastEditor;
         if (!cur || !cur.isConnected) return;
@@ -1550,7 +1497,7 @@
   }, true);
 
   // 页面切换节点/输入后刷新角标
-  setInterval(() => { if (ui) refreshBadge(); }, 1500);
+  setInterval(() => { if (ui) { refreshBadge(); syncPanelToEditor(); } }, 400);
   window.addEventListener('resize', () => placePanel());
 
   /* ------------------------------------------------------------------ *
@@ -1569,7 +1516,6 @@
     started = false;
     clearInterval(bootTimer);
     clearPin();
-    clearPending();
     if (ui) { ui.launch.remove(); ui.panel.remove(); ui = null; }
   }
 
