@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "跳跃视界 · 画布引用助手",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "把画布素材名字一键转成 @图片N 引用；已引用清单定位高亮、撤销历史、查找替换，面板可拖动。",
   "minimum_chrome_version": "111",
   "icons": {

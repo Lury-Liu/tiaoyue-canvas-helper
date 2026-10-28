@@ -29,10 +29,10 @@
 | 预览 | 写回前查看转换结果 |
 | 已引用清单 | 列出正文里的 `@图片N`，点击定位 + 高亮，重复点击跳下一处 |
 | 撤销 / 重做 | `Alt+Z` / `Alt+Shift+Z`，按节点归档，最多 20 步 |
-| 查找替换 | `Ctrl+F`，支持「替换为引用」 |
+| 查找替换 | `Ctrl+F`，支持「替换为引用」，默认忽略大小写（可关） |
 | 面板拖动 | 面板与悬浮球均可拖，位置本地记忆，双击标题栏复位 |
 | 切节点自动刷新 | 面板打开时切节点，素材列表 ≤0.4s 自动跟随 |
-| 自动更新 | 扩展每小时检查 GitHub，热替换；断网回退内置版 |
+| 自动更新 | 每次进入画布自动检查 GitHub 并热替换（无需刷新）；断网回退内置版 |
 
 ### 已移除（不要加回来）
 
@@ -80,7 +80,7 @@
 | 定位高亮 | `setPin()` + `followLoop()` 逐帧跟随 Range；`pinClipRects()` 用「编辑器 + 所有 overflow 非 visible 祖先」裁剪，滚出面板即隐藏，滚回重现 |
 | 历史 | `HIST` 按节点归档（`histKey`），写回统一走 `writeText()` |
 | 路由 | SPA：`CANVAS_ROUTE='/aigc/canvas/'` + `pushState/popstate/hashchange` 钩子启停；`teardown()` 清 UI |
-| 热更新 | `loader.js` 比对 `version.json`，拉新 `content.js` 存 `chrome.storage`，`blob:` 注入；置 `__TYQ_FORCE_ONCE` 让新实例接管，旧实例靠 `alive` / `__TYQ_DISPOSE__` 停监听 |
+| 热更新 | 双通道：`loader.js`（隔离世界，1 小时一次，存 `chrome.storage` 供离线兜底）+ `selfUpdate()`（content.js 主世界自带，**每次进入画布检查**，含 SPA 跳转）。两处都拉 `version.json` 比对，新版 blob 注入 + `__TYQ_FORCE_ONCE` 接管，旧实例靠 `alive` / `__TYQ_DISPOSE__` 停监听。仓库转移需同时改 `config.js` 和 user.js 里的 `UPD_REPO` |
 
 **高风险依赖**：`_promptEditor_` 类名、React fiber props 结构、wujie 挂载方式。任一处变更都可能导致 `api()` 返回 `null`（面板提示「未找到提示词输入框」）。
 
@@ -113,7 +113,7 @@ git add -A && git commit -m "v1.8.0" && git push
 2. 重写 `version.json`
 3. 由 `tiaoyue-ref-helper.user.js` 生成 `content.js`（去掉油猴头，换扩展头）
 
-其他机器：1 小时内自动检查并生效（下次进页面时），或扩展弹窗点「立即检查更新」再刷新画布页。
+其他机器：进入画布即自动检查更新（loader 最多 1 小时一次，content 自检查每次进画布都跑）；或扩展弹窗点「立即检查更新」。
 
 ---
 

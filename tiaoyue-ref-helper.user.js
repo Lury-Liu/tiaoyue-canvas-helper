@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.8.0
+// @version      1.9.0
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -28,6 +28,47 @@
   // 热更新后旧实例的 document 监听仍然存在：统一用 alive 关掉，避免双份响应 / 重复 toast
   let alive = true;
   window.__TYQ_DISPOSE__ = () => { alive = false; };
+
+  // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
+  const TYQ_VERSION = '1.9.0';
+  // 自更新源（仓库转移时此处与 ext/config.js 一起改）
+  const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
+  const UPD_BRANCH = 'main';
+
+  function verCmp(a, b) {
+    const pa = String(a).split('.').map((x) => parseInt(x, 10) || 0);
+    const pb = String(b).split('.').map((x) => parseInt(x, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] || 0) - (pb[i] || 0);
+      if (d) return d > 0 ? 1 : -1;
+    }
+    return 0;
+  }
+
+  /* 每次进入画布检查一次线上版本：有新版就拉取并注入接管（blob 脚本，
+   * __TYQ_FORCE_ONCE 机制清掉本实例）。失败静默——当前版本继续运行。 */
+  let updBusy = false;
+  async function selfUpdate() {
+    if (updBusy || !alive) return;
+    updBusy = true;
+    try {
+      const base = `https://raw.githubusercontent.com/${UPD_REPO}/${UPD_BRANCH}`;
+      const meta = await (await fetch(`${base}/tiaoyue-ref-helper-ext/version.json?t=${Date.now()}`, { cache: 'no-store' })).json();
+      const online = String(meta.version || '');
+      if (!online || verCmp(online, TYQ_VERSION) <= 0) return;
+      const code = await (await fetch(`${base}/${meta.file || 'tiaoyue-ref-helper-ext/content.js'}?t=${Date.now()}`, { cache: 'no-store' })).text();
+      if (code.length < 5000 || !code.includes('__TYQ')) return;
+      toast(`发现新版 v${online}，已自动更新`, 2500);
+      const blob = new Blob(['window.__TYQ_FORCE_ONCE=true;\n', code], { type: 'text/javascript' });
+      const url = URL.createObjectURL(blob);
+      const s = document.createElement('script');
+      s.src = url;
+      s.onload = () => URL.revokeObjectURL(url);
+      (document.head || document.documentElement).appendChild(s);
+    } catch (e) { /* 网络失败等：静默，本版本继续 */ } finally {
+      updBusy = false;
+    }
+  }
 
   /* ------------------------------------------------------------------ *
    * 0. 基础：无界微前端 DOM 访问
@@ -362,6 +403,8 @@
   .tyq-btn.primary{background:#2563eb;border-color:#2563eb;color:#fff}
   .tyq-btn.primary:hover{background:#1d4ed8}
   .tyq-hint{color:#9ca3af;font-size:11.5px;margin-top:8px;line-height:1.5}
+  .tyq-check{display:flex;align-items:center;gap:6px;margin-top:8px;color:#9ca3af;font-size:12px;cursor:pointer;user-select:none}
+  .tyq-check input{accent-color:#3b82f6;margin:0;cursor:pointer}
   .tyq-token{flex:none;font-size:11px;color:#93c5fd;background:rgba(59,130,246,.15);border-radius:6px;padding:1px 6px}
   .tyq-empty{color:#6b7280;font-size:12px;padding:14px 4px;text-align:center}
   .tyq-count{color:#a3e635;font-size:12px}
@@ -1141,7 +1184,7 @@
   }
 
   /* ---------------- 查找替换 ---------------- */
-  let findState = { find: '', rep: '', last: -1, useRef: '' };
+  let findState = { find: '', rep: '', last: -1, useRef: '', ic: true };
 
   function renderFind(body, a, index) {
     const f = el('input', 'tyq-input');
@@ -1168,6 +1211,14 @@
     sel.value = findState.useRef || '';
     body.appendChild(sel);
 
+    const icRow = el('label', 'tyq-check');
+    const ic = document.createElement('input');
+    ic.type = 'checkbox';
+    ic.checked = findState.ic !== false;
+    icRow.appendChild(ic);
+    icRow.appendChild(el('span', '', '忽略大小写'));
+    body.appendChild(icRow);
+
     const info = el('div', 'tyq-hint', '');
     body.appendChild(info);
 
@@ -1183,7 +1234,7 @@
       const text = serialize(a.el);
       const q = f.value;
       if (!q) { info.textContent = '输入要查找的内容'; return; }
-      const n = countOccurrences(text, q);
+      const n = countOccurrences(text, q, ic.checked);
       info.innerHTML = n ? `共 <span class="tyq-count">${n}</span> 处匹配` : '未找到匹配';
     };
     refreshInfo();
@@ -1192,7 +1243,7 @@
       const text = serialize(a.el);
       const q = f.value;
       if (!q) return;
-      const positions = allPositions(text, q);
+      const positions = allPositions(text, q, ic.checked);
       if (!positions.length) { toast('未找到匹配'); return; }
       let idx = positions.indexOf(findState.last);
       idx = idx === -1 ? (dir > 0 ? 0 : positions.length - 1) : (idx + dir + positions.length) % positions.length;
@@ -1212,7 +1263,7 @@
       const q = f.value;
       if (!q) return;
       const rep = sel.value ? '@' + sel.value : r.value;
-      const positions = allPositions(text, q);
+      const positions = allPositions(text, q, ic.checked);
       if (!positions.length) { toast('未找到匹配'); return; }
       let at = findState.last;
       if (!positions.includes(at)) at = positions[0];
@@ -1227,9 +1278,13 @@
       const q = f.value;
       if (!q) return;
       const rep = sel.value ? '@' + sel.value : r.value;
-      const n = countOccurrences(text, q);
+      const positions = allPositions(text, q, ic.checked);
+      const n = positions.length;
       if (!n) { toast('未找到匹配'); return; }
-      if (!writeText(text.split(q).join(rep), `替换 ${n} 处`)) return;
+      let out = ''; let pos = 0;
+      positions.forEach((at) => { out += text.slice(pos, at) + rep; pos = at + q.length; });
+      out += text.slice(pos);
+      if (!writeText(out, `替换 ${n} 处`)) return;
       findState.last = -1;
       toast(`已替换 ${n} 处，Alt+Z 可撤销`);
       setTimeout(() => { refreshInfo(); }, 300);
@@ -1238,6 +1293,7 @@
     f.addEventListener('input', () => { findState.find = f.value; findState.last = -1; refreshInfo(); });
     r.addEventListener('input', () => { findState.rep = r.value; });
     sel.addEventListener('change', () => { findState.useRef = sel.value; });
+    ic.addEventListener('change', () => { findState.ic = ic.checked; findState.last = -1; refreshInfo(); });
     [f, r].forEach((inp) => inp.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter') { e.preventDefault(); doFind(e.shiftKey ? -1 : 1); }
@@ -1249,14 +1305,20 @@
     setTimeout(() => f.focus(), 30);
   }
 
-  function allPositions(text, q) {
+  function allPositions(text, q, ic) {
     const out = [];
     if (!q) return out;
-    let i = text.indexOf(q);
-    while (i !== -1) { out.push(i); i = text.indexOf(q, i + q.length); }
+    let hay = text; let needle = q;
+    if (ic) {
+      // 个别字符 toLowerCase 后长度会变（如 İ），偏移会错位，此时退回精确匹配
+      const t = text.toLowerCase(); const s = q.toLowerCase();
+      if (t.length === text.length && s.length === q.length) { hay = t; needle = s; }
+    }
+    let i = hay.indexOf(needle);
+    while (i !== -1) { out.push(i); i = hay.indexOf(needle, i + needle.length); }
     return out;
   }
-  const countOccurrences = (text, q) => allPositions(text, q).length;
+  const countOccurrences = (text, q, ic) => allPositions(text, q, ic).length;
 
   /* ------------------------------------------------------------------ *
    * 4. 事件：快捷键 + 选区记忆
@@ -1370,7 +1432,7 @@
   }
 
   function onRoute() {
-    if (location.pathname.includes(CANVAS_ROUTE)) onCanvasRoute();
+    if (location.pathname.includes(CANVAS_ROUTE)) { onCanvasRoute(); selfUpdate(); }
     else teardown();
   }
 

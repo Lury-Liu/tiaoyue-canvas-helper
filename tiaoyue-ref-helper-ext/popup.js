@@ -38,7 +38,7 @@ $('recheck').addEventListener('click', async () => {
     const online = String(meta.version || '');
     await chrome.storage.local.set({ [K.online]: online, [K.at]: Date.now() });
     if (online && cmp(online, BUNDLED) > 0) {
-      const code = await (await fetch(`${BASE}/${meta.file || 'tiaoyue-ref-helper-ext/content.js'}`, { cache: 'no-store' })).text();
+      const code = await (await fetch(`${BASE}/${meta.file || 'tiaoyue-ref-helper-ext/content.js'}?t=${Date.now()}`, { cache: 'no-store' })).text();
       if (code.length < 5000 || !code.includes('__TYQ')) throw new Error('内容校验失败');
       await chrome.storage.local.set({ [K.code]: code, [K.ver]: online, [K.status]: '已下载 v' + online + '，刷新画布页生效' });
     } else {

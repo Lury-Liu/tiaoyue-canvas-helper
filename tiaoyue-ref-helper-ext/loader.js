@@ -86,8 +86,8 @@
         return;
       }
 
-      // 4) 有新版：拉代码、校验、入库、注入
-      const code = await fetchText(`${BASE}/${meta.file || 'tiaoyue-ref-helper-ext/content.js'}`);
+      // 4) 有新版：拉代码、校验、入库、注入（同样加时间戳穿透 CDN，避免版本号记新、代码仍旧）
+      const code = await fetchText(`${BASE}/${meta.file || 'tiaoyue-ref-helper-ext/content.js'}?t=${Date.now()}`);
       if (code.length < CODE_MIN_LEN || !code.includes('__TYQ')) {
         throw new Error('更新内容校验失败');
       }

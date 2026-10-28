@@ -23,9 +23,14 @@ if (newVer) {
   }
   manifest.version = newVer;
   fs.writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2) + '\n');
-  // user.js 头部
+  // user.js 头部 + 运行时版本常量（自更新比对用）
   let u = fs.readFileSync(USER_JS, 'utf8');
   u = u.replace(/(\/\/ @version\s+)\S+/, '$1' + newVer);
+  u = u.replace(/(const TYQ_VERSION = ')[^']+(';)/, '$1' + newVer + '$2');
+  if (!u.includes(`const TYQ_VERSION = '${newVer}'`)) {
+    console.error('未找到 TYQ_VERSION 常量，无法同步版本号');
+    process.exit(1);
+  }
   fs.writeFileSync(USER_JS, u);
 }
 const ver = manifest.version;
