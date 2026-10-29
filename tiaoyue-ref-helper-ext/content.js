@@ -1,5 +1,5 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.10.0。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.10.1。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
@@ -19,10 +19,10 @@
 
   // 热更新后旧实例的 document 监听仍然存在：统一用 alive 关掉，避免双份响应 / 重复 toast
   let alive = true;
-  window.__TYQ_DISPOSE__ = () => { alive = false; };
+  window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.10.0';
+  const TYQ_VERSION = '1.10.1';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -134,7 +134,7 @@
   /* ------------------------------------------------------------------ *
    * 1. 文本模型：DOM <-> 纯文本（引用芯片序列化为 @图片N）
    * ------------------------------------------------------------------ */
-  function serialize(ed) {
+  function serialize(ed, trimTrailingBreak = true) {
     let t = '';
     const walk = (n) => {
       for (const c of n.childNodes) {
@@ -150,36 +150,40 @@
       }
     };
     walk(ed);
-    if (ed.lastChild && ed.lastChild.tagName === 'BR' && t.endsWith('\n')) t = t.slice(0, -1);
+    if (trimTrailingBreak && ed.lastChild && ed.lastChild.tagName === 'BR' && t.endsWith('\n')) t = t.slice(0, -1);
     return t;
   }
 
-  // 偏移量 -> Range（与序列化规则一一对应）
-  function rangeFromOffset(ed, start, end) {
-    start = Math.max(0, Math.min(start, serialize(ed).length));
-    end = Math.max(start, Math.min(end == null ? start : end, serialize(ed).length));
+  function offsetModel(ed) {
     const atoms = [];
     const walk = (n) => {
       for (const c of n.childNodes) {
         if (c.nodeType === 3) atoms.push({ node: c, len: (c.textContent || '').length, kind: 'text' });
         else if (c.nodeType === 1) {
           if (c.classList && c.classList.contains('canvas-mention')) {
-            atoms.push({ node: c, len: (c.getAttribute('data-mention-token') || '').length + 1, kind: 'chip' });
+            const token = c.getAttribute('data-mention-token');
+            if (token) atoms.push({ node: c, len: token.length + 1, kind: 'chip' });
           } else if (c.tagName === 'BR') atoms.push({ node: c, len: 1, kind: 'br' });
           else walk(c);
         }
       }
     };
     walk(ed);
+    let length = atoms.reduce((sum, atom) => sum + atom.len, 0);
+    if (ed.lastChild && ed.lastChild.tagName === 'BR') length--;
+    return { atoms, length };
+  }
 
+  function rangeFromOffset(ed, start, end, model = offsetModel(ed)) {
+    start = Math.max(0, Math.min(start, model.length));
+    end = Math.max(start, Math.min(end == null ? start : end, model.length));
     const locate = (off, isEnd) => {
       let acc = 0;
-      for (const a of atoms) {
-        if (off <= acc + a.len) {
+      for (const a of model.atoms) {
+        if (off < acc + a.len || (off === acc + a.len && a.kind === 'text')) {
           const rel = off - acc;
           if (a.kind === 'text') return { node: a.node, offset: rel };
-          if (a.kind === 'chip') return rel === 0 ? { node: a.node, offset: 0 } : { node: a.node.parentNode, offset: idxOf(a.node) + (isEnd ? 1 : 0) };
-          return { node: a.node.parentNode, offset: idxOf(a.node) + (isEnd ? 1 : 0) };
+          return { node: a.node.parentNode, offset: idxOf(a.node) + (rel > 0 && isEnd ? 1 : 0) };
         }
         acc += a.len;
       }
@@ -250,8 +254,8 @@
     return Array.from(m.entries()).sort((a, b) => b[0].length - a[0].length);
   }
 
-  function convertAll(text, index, onlyNames) {
-    const entries = nameMap(index).filter(([nm]) => !onlyNames || onlyNames.has(nm));
+  function convertAll(text, index, skippedTokens) {
+    const entries = nameMap(index).filter(([, it]) => !skippedTokens || !skippedTokens.has(it.token));
     let out = text;
     const stats = [];
     for (const [nm, it] of entries) {
@@ -316,8 +320,8 @@
   let elSeq = 0;
   const elId = (e) => { if (!elIds.has(e)) elIds.set(e, ++elSeq); return elIds.get(e); };
 
-  // 历史按节点归档，切换节点自动开新档
   const HIST = { key: '', list: [], idx: -1 };
+  const nodeHistories = new Map();
 
   function histKey(a) {
     return nodeKey(a);
@@ -325,12 +329,12 @@
 
   function syncHistory(a) {
     const k = histKey(a);
-    if (k === HIST.key && HIST.list.length) return;
+    if (k === HIST.key) return;
+    if (HIST.key) nodeHistories.set(HIST.key, { list: HIST.list, idx: HIST.idx });
+    const saved = nodeHistories.get(k);
     HIST.key = k;
-    HIST.list = [];
-    HIST.idx = -1;
-    const cur = serialize(a.el);
-    if (cur) { HIST.list.push({ text: cur, label: '初始内容', time: Date.now() }); HIST.idx = 0; }
+    HIST.list = saved ? saved.list : [{ text: serialize(a.el), label: '初始内容', time: Date.now() }];
+    HIST.idx = saved ? saved.idx : 0;
   }
 
   function pushHistory(text, label) {
@@ -340,31 +344,47 @@
     HIST.idx = HIST.list.length - 1;
   }
 
-  function writeText(text, label) {
+  function writeText(text, label, expectedKey) {
     const a = api();
     if (!a) { toast('未找到输入框：请先双击节点'); return false; }
+    if (expectedKey && editorKey(a) !== expectedKey) {
+      render();
+      toast('节点或素材已变化，请重新操作');
+      return false;
+    }
     syncHistory(a);
     const cur = serialize(a.el);
     if (cur === text) return false;
     if (a.maxLength && text.length > a.maxLength) { toast('超出长度上限'); return false; }
-    if (!HIST.list.length) pushHistory(cur, '初始内容');   // 空内容也留档，保证第一次写回可撤销
+    if (HIST.list[HIST.idx].text !== cur) pushHistory(cur, '手动编辑');
     if (!a.set(text)) { toast('写入失败：请重新双击节点后再试'); return false; }
     pushHistory(text, label || '编辑');
     return true;
   }
 
-  function goToHistory(i) {
+  function goToHistory(i, expectedKey) {
     const a = api();
     if (!a) return;
+    if (expectedKey && histKey(a) !== expectedKey) {
+      render();
+      toast('节点已切换，请重新操作');
+      return;
+    }
     syncHistory(a);
-    if (i < 0 || i >= HIST.list.length || i === HIST.idx) return;
-    if (!a.set(HIST.list[i].text)) { toast('写入失败：请重新双击节点后再试'); return; }
-    HIST.idx = i;
-    toast('已回到：' + HIST.list[i].label);
+    const target = HIST.list[i];
+    if (!target) return;
+    const cur = serialize(a.el);
+    if (cur === target.text) { HIST.idx = i; return; }
+    if (cur !== HIST.list[HIST.idx].text) pushHistory(cur, '手动编辑');
+    if (!a.set(target.text)) { toast('写入失败：请重新双击节点后再试'); return; }
+    const at = HIST.list.indexOf(target);
+    if (at === -1) pushHistory(target.text, target.label);
+    else HIST.idx = at;
+    toast('已回到：' + target.label);
   }
 
-  const undo = () => goToHistory(HIST.idx - 1);
-  const redo = () => goToHistory(HIST.idx + 1);
+  const undo = () => { captureManualEdit(); goToHistory(HIST.idx - 1); };
+  const redo = () => { captureManualEdit(); goToHistory(HIST.idx + 1); };
 
   /* ------------------------------------------------------------------ *
    * 3. UI
@@ -613,6 +633,12 @@
 
     refreshBadge();
     watchEditorContent(activeEditor());
+    editorMO = new MutationObserver(() => {
+      clearTimeout(editorTimer);
+      editorTimer = setTimeout(syncPanelToEditor, 80);
+    });
+    const root = SHADOW();
+    if (root) editorMO.observe(root, { childList: true, subtree: true });
   }
 
   // 面板默认贴着悬浮球摆；手动拖过之后就固定在拖到的位置
@@ -780,8 +806,9 @@
       return;
     }
     lastRenderKey = editorKey(a);
+    watchEditorContent(a.el);
     const nk = nodeKey(a);
-    if (nk !== uncheckedNodeKey) { uncheckedNodeKey = nk; unchecked.clear(); previewOn = false; findState.last = -1; }
+    if (nk !== uncheckedNodeKey) { uncheckedNodeKey = nk; unchecked.clear(); previewOn = false; findState.last = -1; findState.useRef = ''; }
     const index = buildIndex(a.refs);
     if (activeTab === 'asset') renderAsset(body, a, index);
     else if (activeTab === 'hist') renderHistory(body, a);
@@ -800,18 +827,16 @@
   // 面板开着时切到别的节点/输入框，立刻换成那个节点的素材列表。
   // 原来只在「重新打开面板」时渲染，所以会出现列表不刷新、要关掉再开的情况。
   function syncPanelToEditor() {
-    if (!ui || !isOpen() || activeTab !== 'asset') return;
+    if (!alive || !ui) return;
     const a = api();
-    if (!a) { if (lastRenderKey) render(); return; }
-    if (editorKey(a) === lastRenderKey) return;
-    const ae = document.activeElement;
-    if (ae && ui.panel.contains(ae)) return;   // 正在面板里搜索/输入，不打断
-    const st = ui.body.scrollTop;
-    render();
-    ui.body.scrollTop = st;
+    watchEditorContent(a && a.el);
+    if (!isOpen() || editorKey(a) === lastRenderKey) return;
+    rerenderKeepScroll();
+    refreshBadge();
   }
 
   function renderAsset(body, a, index) {
+    const key = editorKey(a);
     const text = serialize(a.el);
     const matches = scanMatches(text, index);
     const valid = new Set(index.map((x) => x.token));
@@ -915,7 +940,7 @@
       const ta = document.createElement('textarea');
       ta.className = 'tyq-preview';
       ta.readOnly = true;
-      ta.value = convertAll(text, index, allowedNames(index)).text;
+      ta.value = convertAll(text, index, unchecked).text;
       body.appendChild(ta);
       body.appendChild(el('div', 'tyq-hint', '预览：上面是写回后的正文，@图片N 即引用。确认无误再点「转换选中项」。'));
     }
@@ -923,35 +948,29 @@
     prevBtn.addEventListener('click', () => { previewOn = !previewOn; rerenderKeepScroll(); });
 
     convertBtn.addEventListener('click', () => {
-      const { text: out, stats } = convertAll(text, index, allowedNames(index));
+      const { text: out, stats } = convertAll(serialize(a.el), index, unchecked);
       if (!stats.length) { toast('没有可转换的名字'); return; }
       const n = stats.reduce((s, x) => s + x.n, 0);
-      if (!writeText(out, `转引用 ${n} 处`)) return;
+      if (!writeText(out, `转引用 ${n} 处`, key)) return;
       previewOn = false;
       toast(`已转换 ${n} 处（${stats.map((s) => s.token).join('、')}），Alt+Z 可撤销`);
     });
 
+    runBtn.addEventListener('pointerdown', (e) => e.preventDefault());
     runBtn.addEventListener('click', () => {
-      // 只在当前选区范围内做替换
       const ed = a.el;
       const sel = window.getSelection();
-      if (!sel || !sel.rangeCount || !ed.contains(sel.getRangeAt(0).startContainer)) { toast('请先在提示词里选中一段文字'); return; }
+      if (!sel || !sel.rangeCount || !ed.contains(sel.getRangeAt(0).startContainer) || !ed.contains(sel.getRangeAt(0).endContainer)) { toast('请先在提示词里选中一段文字'); return; }
       const s = caretOffsetRange(ed, sel.getRangeAt(0));
       if (!s || s.start === s.end) { toast('未选中文本'); return; }
-      const seg = text.slice(s.start, s.end);
-      const { text: outSeg, stats } = convertAll(seg, index, allowedNames(index));
+      const current = serialize(ed);
+      const seg = current.slice(s.start, s.end);
+      const { text: outSeg, stats } = convertAll(seg, index, unchecked);
       if (!stats.length) { toast('选区内没有可识别的名字'); return; }
-      const out = text.slice(0, s.start) + outSeg + text.slice(s.end);
-      if (!writeText(out, '选区转引用')) return;
+      const out = current.slice(0, s.start) + outSeg + current.slice(s.end);
+      if (!writeText(out, '选区转引用', key)) return;
       toast(`选区内已转换 ${stats.reduce((x, y) => x + y.n, 0)} 处，Alt+Z 可撤销`);
     });
-  }
-
-  function allowedNames(index) {
-    if (!unchecked.size) return null;
-    const s = new Set();
-    index.forEach((it) => { if (!unchecked.has(it.token)) { s.add(it.name); s.add(it.bare); } });
-    return s;
   }
 
   // 正文里已经出现的 @图片N（按出现顺序）
@@ -1158,6 +1177,7 @@
 
   function renderHistory(body, a) {
     syncHistory(a);
+    const key = histKey(a);
 
     const wrap = el('div', 'tyq-hist');
     if (!HIST.list.length) wrap.appendChild(el('div', 'tyq-empty', '还没有操作记录'));
@@ -1169,7 +1189,7 @@
       row.appendChild(el('span', 'tyq-hlabel', h.label));
       if (i === HIST.idx) row.appendChild(el('span', 'tyq-hnow', '当前'));
       row.title = h.text.slice(0, 300);
-      row.addEventListener('click', () => goToHistory(i));
+      row.addEventListener('click', () => goToHistory(HIST.list.indexOf(h), key));
       wrap.appendChild(row);
     });
     body.appendChild(wrap);
@@ -1192,34 +1212,32 @@
       pre.selectNodeContents(ed);
       pre.setEnd(range.startContainer, range.startOffset);
       const tmp1 = document.createElement('div'); tmp1.appendChild(pre.cloneContents());
-      const start = serialize(tmp1);
+      const start = serialize(tmp1, false).length;
       const pre2 = document.createRange();
       pre2.selectNodeContents(ed);
       pre2.setEnd(range.endContainer, range.endOffset);
       const tmp2 = document.createElement('div'); tmp2.appendChild(pre2.cloneContents());
-      return { start, end: serialize(tmp2) };
+      return { start, end: serialize(tmp2, false).length };
     } catch (e) { return null; }
   }
 
-  /* ---------------- 查找高亮 ----------------
-   * 正文里所有命中都套一层半透明框（黄），当前命中额外加蓝色描边。
-   * 逐帧跟随 Range，滚动/重排不飞；用 pinClipRects 做裁剪，滚出提示词区即隐藏。 */
   let hlLayer = null;
   let hlRaf = 0;
-  let findRefreshHook = null;   // 当前查找页的刷新函数（编辑器内容变化时重画高亮）
+  let hlCleanup = null;
+  let findRefreshHook = null;
 
   function clearFindHL() {
+    if (hlCleanup) { hlCleanup(); hlCleanup = null; }
     if (hlRaf) { cancelAnimationFrame(hlRaf); hlRaf = 0; }
     if (hlLayer) { hlLayer.remove(); hlLayer = null; }
   }
 
-  function drawFindHL(ranges, activeIdx) {
+  function drawFindHL(ranges, activeIdx, ed) {
     clearFindHL();
     if (!alive || !ranges.length) return;
-    const boxes = ranges.slice(0, 300).map((rg, i) => {
+    const boxes = ranges.map((rg, i) => {
       const b = el('div', 'tyq-hl' + (i === activeIdx ? ' now' : ''));
       b.__range = rg;
-      b.style.display = 'none';
       return b;
     });
     const layer = el('div', '');
@@ -1227,38 +1245,51 @@
     boxes.forEach((b) => layer.appendChild(b));
     document.body.appendChild(layer);
     hlLayer = layer;
-    const vh = () => window.innerHeight, vw = () => window.innerWidth;
-    const tick = () => {
+    const clipRange = document.createRange();
+    clipRange.selectNodeContents(ed);
+    const update = () => {
+      hlRaf = 0;
       if (!layer.isConnected || !alive) { clearFindHL(); return; }
-      for (const b of boxes) {
-        let rect = null;
-        try { rect = b.__range.getBoundingClientRect(); } catch (e) { rect = null; }
-        let show = false;
-        if (rect && (rect.width || rect.height)) {
-          const clips = pinClipRects(b.__range);
-          show = clips.every((c) => rect.bottom > c.top + 1 && rect.top < c.bottom - 1 &&
-            rect.right > c.left + 1 && rect.left < c.right - 1) &&
-            rect.bottom > 0 && rect.top < vh() && rect.right > 0 && rect.left < vw();
-        }
-        if (show) {
+      const clip = pinClipRects(clipRange).reduce((out, r) => ({
+        left: Math.max(out.left, r.left), top: Math.max(out.top, r.top),
+        right: Math.min(out.right, r.right), bottom: Math.min(out.bottom, r.bottom),
+      }), { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight });
+      const rects = boxes.map((b) => b.__range.getBoundingClientRect());
+      boxes.forEach((b, i) => {
+        const rect = rects[i];
+        const left = Math.max(rect.left - 2, clip.left), top = Math.max(rect.top - 2, clip.top);
+        const right = Math.min(rect.right + 2, clip.right), bottom = Math.min(rect.bottom + 2, clip.bottom);
+        if (rect.height && right > left && bottom > top) {
           b.style.display = 'block';
-          b.style.left = (rect.left - 2) + 'px';
-          b.style.top = (rect.top - 2) + 'px';
-          b.style.width = Math.max(rect.width + 4, 4) + 'px';
-          b.style.height = Math.max(rect.height + 4, 4) + 'px';
-        } else {
-          b.style.display = 'none';
-        }
-      }
-      hlRaf = requestAnimationFrame(tick);
+          b.style.left = left + 'px';
+          b.style.top = top + 'px';
+          b.style.width = (right - left) + 'px';
+          b.style.height = (bottom - top) + 'px';
+        } else b.style.display = 'none';
+      });
     };
-    tick();
+    const schedule = () => { if (!hlRaf) hlRaf = requestAnimationFrame(update); };
+    const root = ed.getRootNode();
+    root.addEventListener('scroll', schedule, true);
+    window.addEventListener('scroll', schedule, true);
+    window.addEventListener('resize', schedule);
+    const resize = new ResizeObserver(schedule);
+    resize.observe(ed);
+    if (ed.parentElement) resize.observe(ed.parentElement);
+    hlCleanup = () => {
+      root.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('resize', schedule);
+      resize.disconnect();
+    };
+    schedule();
   }
 
   /* ---------------- 查找替换 ---------------- */
   let findState = { find: '', rep: '', last: -1, useRef: '', ic: true };
 
   function renderFind(body, a, index) {
+    const key = editorKey(a);
     const f = el('input', 'tyq-input');
     f.placeholder = '查找内容（Ctrl+F 打开时自动带入选中文本）';
     f.value = findState.find;
@@ -1357,8 +1388,11 @@
           (cur >= 0 ? ` · 当前第 <span class="tyq-count">${cur + 1}</span>/${positions.length} 处` : ' · 回车跳到第 1 处');
       }
       renderAssetHits(q);
-      const ranges = positions.map((at) => rangeFromOffset(a.el, at, at + q.length)).filter(Boolean);
-      drawFindHL(ranges, cur);
+      const shown = positions.slice(0, 300);
+      if (cur >= shown.length) shown[shown.length - 1] = positions[cur];
+      const model = offsetModel(a.el);
+      const ranges = shown.map((at) => rangeFromOffset(a.el, at, at + q.length, model));
+      drawFindHL(ranges, shown.indexOf(findState.last), a.el);
     };
     findRefreshHook = () => refresh();
     refresh();
@@ -1379,13 +1413,14 @@
         else if (dir < 0 && idx === positions.length - 1) toast(`已到开头，从末尾继续：第 ${positions.length}/${positions.length} 处`);
       }
       findState.last = positions[idx];
+      const input = document.activeElement === r ? r : f;
       const range = rangeFromOffset(a.el, findState.last, findState.last + q.length);
       if (range) {
-        try { a.el.focus({ preventScroll: true }); } catch (e2) { a.el.focus(); }
         const s = window.getSelection();
         s.removeAllRanges(); s.addRange(range);
         scrollRangeIntoView(range);
       }
+      input.focus({ preventScroll: true });
       refresh(text);
     };
 
@@ -1399,9 +1434,9 @@
       let at = findState.last;
       if (!positions.includes(at)) at = positions[0];
       const out = text.slice(0, at) + rep + text.slice(at + q.length);
-      if (!writeText(out, '替换 1 处')) return;
-      findState.last = at + rep.length;
-      setTimeout(() => { refresh(); }, 250);
+      if (!writeText(out, '替换 1 处', key)) return;
+      const remaining = allPositions(out, q, ic.checked);
+      findState.last = remaining.find((pos) => pos >= at + rep.length) ?? remaining[0] ?? -1;
     };
 
     const doReplaceAll = () => {
@@ -1415,10 +1450,9 @@
       let out = ''; let pos = 0;
       positions.forEach((at) => { out += text.slice(pos, at) + rep; pos = at + q.length; });
       out += text.slice(pos);
-      if (!writeText(out, `替换 ${n} 处`)) return;
+      if (!writeText(out, `替换 ${n} 处`, key)) return;
       findState.last = -1;
       toast(`已替换 ${n} 处，Alt+Z 可撤销`);
-      setTimeout(() => { refresh(); }, 300);
     };
 
     f.addEventListener('input', () => { findState.find = f.value; findState.last = -1; refresh(); });
@@ -1427,7 +1461,7 @@
     ic.addEventListener('change', () => { findState.ic = ic.checked; findState.last = -1; refresh(); });
     [f, r].forEach((inp) => inp.addEventListener('keydown', (e) => {
       e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); doFind(e.shiftKey ? -1 : 1); }
+      if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); doFind(e.shiftKey ? -1 : 1); }
     }));
     prev.addEventListener('click', () => doFind(-1));
     next.addEventListener('click', () => doFind(1));
@@ -1510,14 +1544,18 @@
 
   // 内容变化走 MutationObserver（事件驱动），不再轮询 serialize
   let contentMO = null, moEditor = null, moTimer = 0;
+  let editorMO = null, editorTimer = 0;
   function watchEditorContent(ed) {
-    if (!ed || ed === moEditor) return;
+    if (ed === moEditor) return;
     if (contentMO) contentMO.disconnect();
+    clearTimeout(moTimer);
     moEditor = ed;
+    if (!ed) return;
     contentMO = new MutationObserver(() => {
       clearTimeout(moTimer);
       moTimer = setTimeout(() => {
         if (!alive || !ui) return;
+        if (isOpen() && editorKey(api()) !== lastRenderKey) { syncPanelToEditor(); return; }
         refreshBadge();
         if (isOpen() && activeTab === 'find') { if (findRefreshHook) findRefreshHook(); }
         else if (isOpen()) rerenderKeepScroll();
@@ -1544,9 +1582,12 @@
     clearInterval(bootTimer);
     clearPin();
     clearFindHL();
+    findRefreshHook = null;
     if (contentMO) { contentMO.disconnect(); contentMO = null; }
+    if (editorMO) { editorMO.disconnect(); editorMO = null; }
     moEditor = null;
     clearTimeout(moTimer);
+    clearTimeout(editorTimer);
     if (ui) { ui.launch.remove(); ui.panel.remove(); ui = null; }
   }
 
@@ -1557,7 +1598,7 @@
       if (!location.pathname.includes(CANVAS_ROUTE)) { teardown(); return; }
       if (SHADOW()) {
         clearInterval(bootTimer);
-        buildUI();
+        if (!ui) buildUI();
         setTimeout(maybeShowGuide, 1500);
       }
     }, 1000);

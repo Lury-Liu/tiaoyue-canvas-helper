@@ -5,83 +5,111 @@
 <title>fake canvas v2</title>
 <style>
   body{margin:0;background:#0d0e11;color:#7b8291;font:14px system-ui}
-  wujie-app{display:block;height:100vh}
+  nav{margin:12px 36px}
+  nav button{margin-right:8px}
+  wujie-app{display:block;height:calc(100vh - 50px)}
   #blank{position:fixed;left:0;bottom:0;width:300px;height:160px;background:#14151a}
 </style>
 </head>
 <body>
+<nav aria-label="模拟节点切换"><button id="fake-node-A">节点 A</button><button id="fake-node-B">节点 B</button></nav>
 <wujie-app id="wj"></wujie-app>
 <div id="blank"></div>
 <script>
-  const BIN_RE = /@(图片|视频|音频)(\d+)/g;
   const host = document.getElementById('wj');
   const sr = host.attachShadow({ mode: 'open' });
-  sr.innerHTML = '<div class="_promptEditor_fake" contenteditable="true" ' +
-    'style="margin:36px;padding:12px;width:620px;min-height:120px;border:1px solid #333;' +
-    'background:#1b1b1f;color:#e5e7eb;white-space:pre-wrap"></div>';
-
-  const ed = sr.querySelector('[class*="_promptEditor_"]');
-
   const referenceItems = [
     { id: 'a1', type: 'image', assetName: '艾洛文-高级职场套装.png', coverUrl: '' },
     { id: 'a2', type: 'image', assetName: '巴迪-狗形态.png', coverUrl: '' },
     { id: 'a3', type: 'image', assetName: '玛拉-便装.png', coverUrl: '' },
     { id: 'a4', type: 'image', assetName: '艾洛文-高级职场套装.png', coverUrl: '' },
   ];
+  const base = '前缀 艾洛文-高级职场套装 中间 巴迪-狗形态 结尾 @图片3 已有引用';
 
-  const props = {
-    value: '',
-    maxLength: 5000,
-    referenceItems,
-    onChange(text) {
-      render(text);
-    },
-  };
+  function createNode(id, refs, initial) {
+    const ed = document.createElement('div');
+    ed.className = '_promptEditor_fake';
+    ed.contentEditable = 'true';
+    ed.dataset.nodeId = id;
+    ed.setAttribute('aria-label', '节点 ' + id + ' 提示词');
+    ed.style.cssText = 'margin:20px 36px;padding:12px;width:620px;min-height:120px;border:1px solid #333;' +
+      'background:#1b1b1f;color:#e5e7eb;white-space:pre-wrap';
+    sr.appendChild(ed);
+    const props = { nodeId: 'fake-' + id, value: '', maxLength: 5000, referenceItems: refs, onChange: render };
 
-  function render(text) {
-    ed.textContent = '';
-    const frag = document.createDocumentFragment();
-    BIN_RE.lastIndex = 0;
-    let last = 0, m;
-    while ((m = BIN_RE.exec(text)) !== null) {
-      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
-      const span = document.createElement('span');
-      span.className = 'canvas-mention';
-      span.setAttribute('data-mention-token', m[1] + m[2]);
-      span.setAttribute('contenteditable', 'false');
-      span.textContent = '@' + m[1] + m[2];
-      frag.appendChild(span);
-      last = m.index + m[0].length;
+    function render(text) {
+      const frag = document.createDocumentFragment();
+      const re = /@(图片|视频|音频)(\d+)/g;
+      let last = 0, m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+        const span = document.createElement('span');
+        span.className = 'canvas-mention';
+        span.setAttribute('data-mention-token', m[1] + m[2]);
+        span.setAttribute('contenteditable', 'false');
+        span.textContent = '@' + m[1] + m[2];
+        frag.appendChild(span);
+        last = m.index + m[0].length;
+      }
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      ed.replaceChildren(frag);
+      props.value = text;
     }
-    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
-    ed.appendChild(frag);
-    props.value = text;
+
+    function selectText(start, end = start) {
+      ed.focus();
+      const locate = (off) => {
+        const walker = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+        let acc = 0, node;
+        while ((node = walker.nextNode())) {
+          if (acc + node.length >= off) return [node, off - acc];
+          acc += node.length;
+        }
+        return [ed, ed.childNodes.length];
+      };
+      const r = document.createRange();
+      r.setStart(...locate(start));
+      r.setEnd(...locate(end));
+      const s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(r);
+      return s.toString();
+    }
+
+    // 独立 React props；原生输入只同步模型，不经插件写回/历史。
+    ed['__reactFiber$fake'] = { memoizedProps: props, return: null };
+    ed.addEventListener('input', () => { props.value = ed.innerText; });
+    render(initial);
+    return { ed, props, render, referenceItems: refs, base: initial, selectText };
   }
 
-  // 伪造 React fiber：让脚本的 richFiber() 能找到 value / onChange / referenceItems
-  ed['__reactFiber$fake'] = { memoizedProps: props, return: null };
+  const nodes = {
+    A: createNode('A', referenceItems, base),
+    B: createNode('B', [
+      { id: 'b1', type: 'image', assetName: '巴迪-狗形态.png', coverUrl: '' },
+      { id: 'b2', type: 'image', assetName: 'B独有-场景.png', coverUrl: '' },
+    ], 'B前缀 巴迪-狗形态 中间 B独有-场景 结尾 @图片1'),
+  };
 
-  const base = '前缀 艾洛文-高级职场套装 中间 巴迪-狗形态 结尾 @图片3 已有引用';
-  render(base);
+  function switchNode(id) {
+    for (const [key, node] of Object.entries(nodes)) {
+      node.ed.style.display = key === id ? 'block' : 'none';
+      document.getElementById('fake-node-' + key).setAttribute('aria-pressed', String(key === id));
+    }
+    window.getSelection().removeAllRanges();
+    nodes[id].ed.focus();
+  }
+  for (const id of Object.keys(nodes)) {
+    document.getElementById('fake-node-' + id).addEventListener('click', () => switchNode(id));
+  }
+  switchNode('A');
 
   window.__fake = {
-    ed, props, render, referenceItems, base,
-    reset() { render(base); window.getSelection().removeAllRanges(); },
+    ...nodes.A, nodes, switchNode,
+    reset() { nodes.A.render(base); window.getSelection().removeAllRanges(); },
     setCaret(off) {
-      ed.focus();
-      const r = document.createRange();
-      const walker = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
-      let acc = 0, node, target = null, targetOff = 0;
-      while ((node = walker.nextNode())) {
-        const len = node.textContent.length;
-        if (acc + len >= off) { target = node; targetOff = off - acc; break; }
-        acc += len;
-      }
-      if (!target) { r.selectNodeContents(ed); r.collapse(false); }
-      else { r.setStart(target, Math.min(targetOff, target.textContent.length)); r.collapse(true); }
-      const s = window.getSelection();
-      s.removeAllRanges(); s.addRange(r);
-      return { off, text: ed.textContent.slice(0, 40) };
+      nodes.A.selectText(off);
+      return { off, text: nodes.A.ed.textContent.slice(0, 40) };
     },
     citedBadges() { return [...document.querySelectorAll('.tyq-cite-badge')].map(e => e.textContent); },
     citedChips() { return [...document.querySelectorAll('.tyq-citem')].map(e => e.textContent); },
