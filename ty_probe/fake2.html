@@ -70,7 +70,9 @@
       const r = document.createRange();
       r.setStart(...locate(start));
       r.setEnd(...locate(end));
-      const s = window.getSelection();
+      // 与真实站点一致：选区属于 shadow 树，window.getSelection 拿到的是重定向后的 range
+      const root = ed.getRootNode();
+      const s = root.getSelection ? root.getSelection() : window.getSelection();
       s.removeAllRanges();
       s.addRange(r);
       return s.toString();

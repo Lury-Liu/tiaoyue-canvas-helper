@@ -1,5 +1,5 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.10.1。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.10.2。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
@@ -22,7 +22,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.10.1';
+  const TYQ_VERSION = '1.10.2';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -959,7 +959,7 @@
     runBtn.addEventListener('pointerdown', (e) => e.preventDefault());
     runBtn.addEventListener('click', () => {
       const ed = a.el;
-      const sel = window.getSelection();
+      const sel = editorSelection(ed);
       if (!sel || !sel.rangeCount || !ed.contains(sel.getRangeAt(0).startContainer) || !ed.contains(sel.getRangeAt(0).endContainer)) { toast('请先在提示词里选中一段文字'); return; }
       const s = caretOffsetRange(ed, sel.getRangeAt(0));
       if (!s || s.start === s.end) { toast('未选中文本'); return; }
@@ -989,10 +989,17 @@
     return Array.from(out.values());
   }
 
+  // 编辑器在 wujie 的 shadow 树里：window.getSelection() 拿到的是被重定向到
+  // host 的 range（起点不在编辑器内），读选区必须用编辑器所在树的 selection
+  function editorSelection(ed) {
+    const root = ed.getRootNode();
+    return root && root.getSelection ? root.getSelection() : window.getSelection();
+  }
+
   function selectRange(ed, r) {
     try {
       try { ed.focus({ preventScroll: true }); } catch (e2) { ed.focus(); }
-      const s = window.getSelection();
+      const s = editorSelection(ed);
       s.removeAllRanges();
       s.addRange(r);
     } catch (e) { /* 忽略 */ }
@@ -1416,7 +1423,7 @@
       const input = document.activeElement === r ? r : f;
       const range = rangeFromOffset(a.el, findState.last, findState.last + q.length);
       if (range) {
-        const s = window.getSelection();
+        const s = editorSelection(a.el);
         s.removeAllRanges(); s.addRange(range);
         scrollRangeIntoView(range);
       }
@@ -1519,7 +1526,7 @@
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'f' || e.key === 'F')) {
       if (!ed) return; // 不在提示词框内则保留浏览器原生查找
       e.preventDefault(); e.stopPropagation();
-      const sel = window.getSelection();
+      const sel = editorSelection(ed);
       let picked = '';
       if (sel && sel.rangeCount && ed.contains(sel.getRangeAt(0).startContainer)) {
         picked = sel.toString();

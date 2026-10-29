@@ -2,7 +2,7 @@
 
 > 浏览器扩展（Edge/Chrome MV3）+ 油猴脚本：在 [www.tiaoyue.com](https://www.tiaoyue.com) 画布提示词框里，把素材名字转成 `@图片N` 引用，并支持已引用清单定位、撤销历史、查找替换。
 >
-> 仓库：`https://github.com/Lury-Liu/tiaoyue-canvas-helper` · 分支 `main` · 当前版本 **1.10.1**
+> 仓库：`https://github.com/Lury-Liu/tiaoyue-canvas-helper` · 分支 `main` · 当前版本 **1.10.2**
 > 历史修复记录与技术债：[ISSUES.md](./ISSUES.md)
 
 ---
@@ -101,8 +101,8 @@
 **开发**：无 npm 依赖，改完源码执行 `node tools/build.js`。
 
 ```bash
-node tools/build.js 1.10.1        # 提升 manifest / version.json / @version / TYQ_VERSION，再生成 content.js
-git add -A && git commit -m "v1.10.1" && git push
+node tools/build.js 1.10.2        # 提升 manifest / version.json / @version / TYQ_VERSION，再生成 content.js
+git add -A && git commit -m "v1.10.2" && git push
 ```
 
 - 其他机器：进入画布即自动检查（loader 最多 1h 一次，content 自检查每次进画布都跑）；或弹窗点「立即检查更新」。
