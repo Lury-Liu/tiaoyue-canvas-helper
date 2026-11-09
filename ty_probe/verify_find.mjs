@@ -434,6 +434,61 @@ try {
     await expectText('F8 被移出列表的目标恢复后可撤销到手稿', '满容量手稿');
   });
 
+  await scenario('v1.11.2 选择器/前进/手改撤销', async () => {
+    // X1 选择器内回车选中首项
+    await fresh('前缀 巴迪 中段', 'find');
+    await typeFind('巴迪');
+    await ev(`document.querySelector('.tyq-pickbtn').click(); 1`);
+    await pause(150);
+    await ev(`(()=>{const i=document.querySelector('.tyq-pickbox input.tyq-input'); i.focus(); return 1})()`);
+    await pressEnter();
+    check('X1 选择器回车选中首项', /替换为引用：/.test(await ev(`document.querySelector('.tyq-pickbtn').textContent`)),
+      await ev(`document.querySelector('.tyq-pickbtn').textContent`));
+
+    // X2/X3 替换最后一处后不绕回开头
+    await fresh('aa aa', 'find');
+    await typeFind('aa');
+    await clickButton('下一个');
+    await clickButton('下一个');   // 两次才到第 2 处
+    await typeInput(1, 'aa!');
+    await clickButton('替换');
+    await expectText('X2 替换最后一处内容正确', 'aa aa!');
+    check('X3 替换最后一处后停在末尾不回绕', /共 2 处/.test(await infoText()) && /回车跳到第 1 处/.test(await infoText()), await infoText());
+
+    // X4/X5 手改后撤销/重做都保留
+    await fresh('aa aa', 'find');
+    await typeFind('aa');
+    await typeInput(1, 'aa!');
+    await clickButton('全部替换');
+    await expectText('X4a 全部替换生效', 'aa! aa!');
+    await ev(`__fake.render('手写内容')`);
+    await pause(120);
+    await history('undo');
+    await expectText('X4 手改后撤销回到上一快照', 'aa! aa!');
+    await history('redo');
+    await expectText('X5 重做可回到手改内容', '手写内容');
+
+    // X6 切节点清空失效的替换目标（A 的图片3 在 B 不存在）
+    await fresh('A 正文 艾洛文', 'find');
+    await ev(`document.querySelector('.tyq-pickbtn').click(); 1`);
+    await pause(120);
+    await ev(`(()=>{const r=[...document.querySelectorAll('.tyq-pickrow')].find(x=>x.textContent.includes('图片3')); if(r) r.click(); return 1})()`);
+    await pause(150);
+    const refBefore = await ev(`document.querySelector('.tyq-pickbtn').textContent`);
+    await switchNode('B');
+    await pause(500);
+    const refAfter = await ev(`document.querySelector('.tyq-pickbtn').textContent`);
+    check('X6 切节点后清空失效的替换目标', /替换为引用/.test(refBefore) && /普通文本/.test(refAfter), refBefore + ' -> ' + refAfter);
+
+    // X7/X8 替换文本包含关键词时不自吃
+    await fresh('aa aa', 'find');
+    await typeFind('aa');
+    await typeInput(1, 'aaa');
+    await clickButton('替换');
+    await expectText('X7 替换文本含关键词不吞刚插入内容', 'aaa aa');
+    check('X8 前进目标跳过插入区间', /共 2 处/.test(await infoText()) && /第 2\/2/.test(await infoText()), await infoText());
+  });
+
   const failed = results.filter((result) => !result.pass);
   console.log(`\n${results.length - failed.length}/${results.length} 通过`);
   process.exitCode = failed.length ? 1 : 0;

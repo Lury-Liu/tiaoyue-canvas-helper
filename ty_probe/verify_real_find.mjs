@@ -2,12 +2,13 @@
 import { connect, attach, ev, send, close } from './lib.mjs';
 import fs from 'node:fs';
 
-const T = fs.readFileSync('find_real_target.txt', 'utf8').trim();
 const SRC = fs.readFileSync('../tiaoyue-ref-helper-ext/content.js', 'utf8');
 const SYNTH = fs.readFileSync('synth_editor.js', 'utf8');
 
 await connect();
-const s = await attach(T);
+const tgt = (await send('Target.getTargets')).targetInfos.find((x) => x.type === 'page' && x.url.includes('/aigc/canvas/'));
+if (!tgt) { console.log('画布页未打开，跳过'); process.exit(0); }
+const s = await attach(tgt.targetId);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (n, ok, d = '') => { results.push({ n, ok }); console.log((ok ? 'PASS' : 'FAIL') + ' | ' + n + (d ? ' | ' + d : '')); };

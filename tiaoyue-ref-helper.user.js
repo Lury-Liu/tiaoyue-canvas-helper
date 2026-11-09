@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.11.1
+// @version      1.11.2
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -30,7 +30,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.11.1';
+  const TYQ_VERSION = '1.11.2';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -361,14 +361,14 @@
   function writeText(text, label, expectedKey) {
     const a = api();
     if (!a) { toast('未找到输入框：请先双击节点'); return false; }
-    if (expectedKey && editorKey(a) !== expectedKey) {
+    if (expectedKey && nodeKey(a) !== expectedKey) {
       render();
       toast('节点或素材已变化，请重新操作');
       return false;
     }
     syncHistory(a);
     const cur = serialize(a.el);
-    if (cur === text) return false;
+    if (sameText(cur, text)) return false;
     if (a.maxLength && text.length > a.maxLength) {
       toast(`超出长度上限：将变成 ${text.length} 字，上限 ${a.maxLength} 字（多 ${text.length - a.maxLength} 字）`, 3200);
       return false;
@@ -406,7 +406,19 @@
   function stepHistory(dir) {
     const a = api();
     if (!a) return;
+    syncHistory(a);
     const cur = serialize(a.el);
+    const known = HIST.list.findIndex((h) => sameText(h.text, cur));
+
+    // 当前文本不在历史里（用户手改过）：第一次撤销应该退回「手改前那一版」，
+    // 同时把手改本身记成一步，重做能回到手改状态。
+    if (dir < 0 && known === -1) {
+      const target = HIST.idx;
+      pushHistory(cur, '手动改过');
+      if (target >= 0) goToHistory(target);
+      return;
+    }
+
     let i = HIST.idx + dir;
     while (i >= 0 && i < HIST.list.length && sameText(HIST.list[i].text, cur)) i += dir;
     if (i < 0) { toast('没有可撤销的操作'); return; }
@@ -878,7 +890,7 @@
   }
 
   function renderAsset(body, a, index) {
-    const key = editorKey(a);
+    const key = nodeKey(a);
     const text = serialize(a.el);
     const matches = scanMatches(text, index);
     const valid = new Set(index.map((x) => x.token));
@@ -1221,7 +1233,6 @@
   function normText(v) {
     return String(v == null ? '' : v)
       .replace(/[\u200b-\u200d\ufeff]/g, '')
-      .replace(/[ \t]+$/gm, '')
       .replace(/\n+$/, '');
   }
   function sameText(x, y) { return normText(x) === normText(y); }
@@ -1350,7 +1361,7 @@
   let findState = { find: '', rep: '', last: -1, useRef: '', ic: true };
 
   function renderFind(body, a, index) {
-    const key = editorKey(a);
+    const key = nodeKey(a);
     const f = el('input', 'tyq-input');
     f.placeholder = '查找内容（Ctrl+F 打开时自动带入选中文本）';
     f.value = findState.find;
@@ -1416,11 +1427,12 @@
     pickSearch.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter') {
-        const first = pickList.querySelector('.tyq-fmatch');
-        if (first) first.click();
+        const first = pickList.querySelector('.tyq-pickrow .tyq-token');
+        if (first) first.closest('.tyq-pickrow').click();
       }
     });
-    findState.useRef = findState.useRef || '';
+    // 切换节点后旧 token 可能不存在于当前素材索引，直接清掉，避免把引用写到别的素材上
+    if (findState.useRef && !index.some((x) => x.token === findState.useRef)) findState.useRef = '';
     syncPick();
 
     const icRow = el('label', 'tyq-check');
@@ -1561,7 +1573,8 @@
       if (!writeText(out, '替换 1 处', key)) return;
       // 替换后自动前进到下一处：形成「替换 → 继续」的连续手感
       const remaining = allPositions(out, q, ic.checked);
-      const nextAt = remaining.find((pos) => pos >= at + rep.length) ?? remaining[0] ?? -1;
+      const from = at + rep.length;                 // 跳过刚插入的区间，rep 里含 q 也不会自吃
+      const nextAt = remaining.find((pos) => pos >= from) ?? -1;
       findState.last = nextAt;
       setTimeout(() => {
         if (!alive) return;
@@ -1569,7 +1582,7 @@
           gotoSel(nextAt, q);
           toast(`已替换 1 处 · 还剩 ${remaining.length} 处`, 1600);
         } else {
-          toast('已替换最后 1 处', 1600);
+          toast(`已替换最后 1 处（共 ${positions.length} 处）`, 1600);
         }
         if (findRefreshHook) findRefreshHook();
       }, 180);

@@ -2,7 +2,7 @@
 
 > 浏览器扩展（Edge/Chrome MV3）+ 油猴脚本：在 [www.tiaoyue.com](https://www.tiaoyue.com) 画布提示词框里，把素材名字转成 `@图片N` 引用，并支持已引用清单定位、撤销历史、查找替换。
 >
-> 仓库：`https://github.com/Lury-Liu/tiaoyue-canvas-helper` · 分支 `main` · 当前版本 **1.11.1**
+> 仓库：`https://github.com/Lury-Liu/tiaoyue-canvas-helper` · 分支 `main` · 当前版本 **1.11.2**
 > 历史修复记录与技术债：[ISSUES.md](./ISSUES.md)
 
 ---
