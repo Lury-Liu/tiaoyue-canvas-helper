@@ -17,7 +17,7 @@ const info = () => ev(s, `document.querySelector('.tyq-panel .tyq-hint').textCon
 
 // 0) 注入最新构建（清旧实例，不动正文）
 await ev(s, `(()=>{document.querySelectorAll('.tyq-launch,.tyq-panel,.tyq-guide-mask,.tyq-pin,.tyq-pmark,.tyq-hl').forEach(n=>n.remove());
-  document.querySelectorAll('#tyq-style').forEach(n=>n.remove());delete window.__TYQ_LOADED__;delete window.__TYQ;
+  document.querySelectorAll('#tyq-style').forEach(n=>n.remove());window.__TYQ_FORCE_ONCE = true;
   localStorage.setItem('tyq.guide.v1','true');try{localStorage.removeItem('tyq.tab.v1')}catch(e){};return 1})()`);
 await ev(s, SRC + '\n"ok"');
 await sleep(1800);

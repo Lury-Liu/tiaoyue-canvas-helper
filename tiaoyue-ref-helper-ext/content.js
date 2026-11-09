@@ -1,5 +1,5 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.11.2。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.11.3。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
@@ -22,7 +22,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.11.2';
+  const TYQ_VERSION = '1.11.3';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -321,6 +321,7 @@
   const elId = (e) => { if (!elIds.has(e)) elIds.set(e, ++elSeq); return elIds.get(e); };
 
   const HIST = { key: '', list: [], idx: -1 };
+  let lastWrite = { text: '', at: 0 };   // 最近一次写回的内容与时间，用来区分「写回过渡态」和「用户手改」
   const nodeHistories = new Map();
 
   function histKey(a) {
@@ -359,15 +360,19 @@
       return false;
     }
     syncHistory(a);
-    const cur = serialize(a.el);
+    const cur = currentText(a);
     if (sameText(cur, text)) return false;
+    // 写回前把手改留档（写回后 400ms 内的过渡态不算手改）
+    const live = serialize(a.el);
+    const entry = HIST.list[HIST.idx];
+    if (entry && !sameText(live, entry.text) && Date.now() - lastWrite.at >= 400) pushHistory(live, '手动编辑');
     if (a.maxLength && text.length > a.maxLength) {
       toast(`超出长度上限：将变成 ${text.length} 字，上限 ${a.maxLength} 字（多 ${text.length - a.maxLength} 字）`, 3200);
       return false;
     }
-    if (!sameText(HIST.list[HIST.idx].text, cur)) pushHistory(cur, '手动编辑');
     if (!a.set(text)) { toast('写入失败：请重新双击节点后再试'); return false; }
     pushHistory(text, label || '编辑');
+    lastWrite = { text: text, at: Date.now() };
     return true;
   }
 
@@ -383,9 +388,11 @@
     const target = HIST.list[i];
     if (!target) return;
     const cur = serialize(a.el);
-    if (sameText(cur, target.text)) { HIST.idx = i; return; }
-    if (!sameText(cur, HIST.list[HIST.idx].text)) pushHistory(cur, '手动编辑');
+    const curEntry = HIST.list[HIST.idx];
+    // 跳转前把手改留档（写回后 400ms 内的过渡态不算）
+    if (curEntry && !sameText(cur, curEntry.text) && Date.now() - lastWrite.at >= 400) pushHistory(cur, '手动编辑');
     if (!a.set(target.text)) { toast('写入失败：请重新双击节点后再试'); return; }
+    lastWrite = { text: target.text, at: Date.now() };
     const at = HIST.list.indexOf(target);
     if (at === -1) pushHistory(target.text, target.label);
     else HIST.idx = at;
@@ -395,24 +402,27 @@
   // 撤销/重做：跳过与当前文本实质相同的条目（应用格式化产生的重复快照）。
   // 不在这里补存「手动改过」快照：写回后应用会短暂返回过渡文本，补存会抢在真实差异之前，
   // 导致列表里出现一条与当前文本相同的条目，撤销变成原地跳。
-  function stepHistory(dir) {
+  function stepHistory(dir, retried) {
     const a = api();
-    if (!a) return;
+    if (!a) {                       // 写回后重渲染会让编辑器短暂不可见
+      if (!retried) setTimeout(() => stepHistory(dir, true), 180);
+      return;
+    }
     syncHistory(a);
+    const idx = HIST.idx;
+    const entry = HIST.list[idx];
     const cur = serialize(a.el);
-    const known = HIST.list.findIndex((h) => sameText(h.text, cur));
 
-    // 当前文本不在历史里（用户手改过）：第一次撤销应该退回「手改前那一版」，
-    // 同时把手改本身记成一步，重做能回到手改状态。
-    if (dir < 0 && known === -1) {
-      const target = HIST.idx;
+    // 当前文本既不是这一版快照、也不是刚写回的回声（400ms 内）→ 用户手改过。
+    // 撤销应退回「手改前那一版」（即 idx 本身），并把这次手改记成一步供重做。
+    const manual = entry && !sameText(cur, entry.text) && (Date.now() - lastWrite.at >= 400);
+    if (dir < 0 && manual) {
       pushHistory(cur, '手动改过');
-      if (target >= 0) goToHistory(target);
+      goToHistory(idx);
       return;
     }
 
-    let i = HIST.idx + dir;
-    while (i >= 0 && i < HIST.list.length && sameText(HIST.list[i].text, cur)) i += dir;
+    const i = idx + dir;
     if (i < 0) { toast('没有可撤销的操作'); return; }
     if (i >= HIST.list.length) { toast('没有可重做的操作'); return; }
     goToHistory(i);
@@ -1229,6 +1239,24 @@
   }
   function sameText(x, y) { return normText(x) === normText(y); }
 
+  // 当前正文：优先取应用模型值（props.value）。DOM 渲染有一拍过渡，
+  // 直接序列化会读到半更新状态，导致历史判断误判。
+  function currentText(a) {
+    if (a && a.props && typeof a.props.value === 'string') return a.props.value;
+    return a ? serialize(a.el) : '';
+  }
+
+  // 用户手改：内容稳定变成「不是我们刚写的、也不在历史里」的文本时留档。
+  // 写回后应用有一拍过渡态（长度会短暂不同），400ms 内的变化一律视为回声。
+  function noteManualEdit(a) {
+    if (!a) return;
+    if (Date.now() - lastWrite.at < 400) return;
+    const cur = serialize(a.el);
+    if (sameText(cur, lastWrite.text)) return;
+    if (HIST.list.some((h) => sameText(h.text, cur))) return;
+    pushHistory(cur, '手动改过');
+  }
+
   function captureManualEdit() {
     const a = api();
     if (!a) return;
@@ -1619,8 +1647,17 @@
       const t = text.toLowerCase(); const s = q.toLowerCase();
       if (t.length === text.length && s.length === q.length) { hay = t; needle = s; }
     }
+    // 引用 token（@图片1 等）内部不参与查找/替换：命中它会把芯片写坏
+    const tokenSpans = [];
+    const re = /@(图片|视频|音频)\d+/g;
+    let m;
+    while ((m = re.exec(text)) !== null) tokenSpans.push([m.index, m.index + m[0].length]);
+    const insideToken = (at, len) => tokenSpans.some(([a, b]) => at < b && at + len > a);
     let i = hay.indexOf(needle);
-    while (i !== -1) { out.push(i); i = hay.indexOf(needle, i + needle.length); }
+    while (i !== -1) {
+      if (!insideToken(i, q.length)) out.push(i);
+      i = hay.indexOf(needle, i + needle.length);
+    }
     return out;
   }
 

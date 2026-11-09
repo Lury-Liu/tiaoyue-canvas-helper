@@ -18,9 +18,8 @@ ty_probe/*
 !ty_probe/verify2.mjs
 !ty_probe/verify3.mjs
 !ty_probe/verify_find.mjs
-!ty_probe/verify_real_find.mjs
 !ty_probe/verify_real_panel.mjs
-!ty_probe/synth_editor.js
+!ty_probe/verify_real_live.mjs
 !ty_probe/rtest.mjs
 !ty_probe/rtest2.mjs
 !ty_probe/rtest3.mjs
