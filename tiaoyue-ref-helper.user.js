@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.11.3
+// @version      1.11.4
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -30,7 +30,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.11.3';
+  const TYQ_VERSION = '1.11.4';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -1802,6 +1802,7 @@
   onRoute();
 
   window.__TYQ = {
+    version: TYQ_VERSION,   // 运行版本（自更新后与内置版可能不同，便于诊断）
     open, close, toggle, serialize, api, activeEditor, buildIndex, convertAll,
     countMatches, scanMatches, writeText, undo, redo, goToHistory,
     HIST, placePanel, jumpTo, jumpToken, scanCitations,

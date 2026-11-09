@@ -22,7 +22,8 @@ const fmt = (t) => (t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) :
 async function render() {
   const st = await chrome.storage.local.get([K.ver, K.at, K.status, K.online]);
   $('local').textContent = 'v' + BUNDLED;
-  $('run').textContent = st[K.ver] && cmp(st[K.ver], BUNDLED) > 0 ? 'v' + st[K.ver] + '（在线更新）' : 'v' + BUNDLED;
+  // 运行版本无法从隔离世界读取，能确定的只有"内置版"和"线上是否更新"
+  $('run').textContent = 'v' + BUNDLED + (st[K.ver] && cmp(st[K.ver], BUNDLED) > 0 ? '（待升级 v' + st[K.ver] + '）' : '');
   $('online').textContent = st[K.online] ? 'v' + st[K.online] : '-';
   const stEl = $('st');
   const status = st[K.status] || '尚未检查';
@@ -38,9 +39,8 @@ $('recheck').addEventListener('click', async () => {
     const online = String(meta.version || '');
     await chrome.storage.local.set({ [K.online]: online, [K.at]: Date.now() });
     if (online && cmp(online, BUNDLED) > 0) {
-      const code = await (await fetch(`${BASE}/${meta.file || 'tiaoyue-ref-helper-ext/content.js'}?t=${Date.now()}`, { cache: 'no-store' })).text();
-      if (code.length < 5000 || !code.includes('__TYQ')) throw new Error('内容校验失败');
-      await chrome.storage.local.set({ [K.code]: code, [K.ver]: online, [K.status]: '已下载 v' + online + '，刷新画布页生效' });
+      // 不在这里下载代码：主世界的 content.js 会在进入画布时自行拉取并热更新
+      await chrome.storage.local.set({ [K.ver]: online, [K.status]: '发现 v' + online + '，刷新画布页自动应用' });
     } else {
       await chrome.storage.local.set({ [K.status]: '已是最新 v' + BUNDLED });
     }
