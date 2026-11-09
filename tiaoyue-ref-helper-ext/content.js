@@ -1,5 +1,5 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.11.0。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.11.1。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
@@ -22,7 +22,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.11.0';
+  const TYQ_VERSION = '1.11.1';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -339,6 +339,12 @@
 
   function pushHistory(text, label) {
     HIST.list = HIST.list.slice(0, HIST.idx + 1);
+    const last = HIST.list[HIST.list.length - 1];
+    if (last && sameText(last.text, text)) {      // 应用格式化导致的重复快照：只更新标签
+      last.label = label;
+      last.time = Date.now();
+      return;
+    }
     HIST.list.push({ text, label, time: Date.now() });
     if (HIST.list.length > MAX_HISTORY) HIST.list.shift();
     HIST.idx = HIST.list.length - 1;
@@ -359,7 +365,7 @@
       toast(`超出长度上限：将变成 ${text.length} 字，上限 ${a.maxLength} 字（多 ${text.length - a.maxLength} 字）`, 3200);
       return false;
     }
-    if (HIST.list[HIST.idx].text !== cur) pushHistory(cur, '手动编辑');
+    if (!sameText(HIST.list[HIST.idx].text, cur)) pushHistory(cur, '手动编辑');
     if (!a.set(text)) { toast('写入失败：请重新双击节点后再试'); return false; }
     pushHistory(text, label || '编辑');
     return true;
@@ -377,8 +383,8 @@
     const target = HIST.list[i];
     if (!target) return;
     const cur = serialize(a.el);
-    if (cur === target.text) { HIST.idx = i; return; }
-    if (cur !== HIST.list[HIST.idx].text) pushHistory(cur, '手动编辑');
+    if (sameText(cur, target.text)) { HIST.idx = i; return; }
+    if (!sameText(cur, HIST.list[HIST.idx].text)) pushHistory(cur, '手动编辑');
     if (!a.set(target.text)) { toast('写入失败：请重新双击节点后再试'); return; }
     const at = HIST.list.indexOf(target);
     if (at === -1) pushHistory(target.text, target.label);
@@ -386,8 +392,21 @@
     toast('已回到：' + target.label);
   }
 
-  const undo = () => { captureManualEdit(); goToHistory(HIST.idx - 1); };
-  const redo = () => { captureManualEdit(); goToHistory(HIST.idx + 1); };
+  // 撤销/重做：跳过与当前文本实质相同的条目（应用格式化产生的重复快照）。
+  // 不在这里补存「手动改过」快照：写回后应用会短暂返回过渡文本，补存会抢在真实差异之前，
+  // 导致列表里出现一条与当前文本相同的条目，撤销变成原地跳。
+  function stepHistory(dir) {
+    const a = api();
+    if (!a) return;
+    const cur = serialize(a.el);
+    let i = HIST.idx + dir;
+    while (i >= 0 && i < HIST.list.length && sameText(HIST.list[i].text, cur)) i += dir;
+    if (i < 0) { toast('没有可撤销的操作'); return; }
+    if (i >= HIST.list.length) { toast('没有可重做的操作'); return; }
+    goToHistory(i);
+  }
+  const undo = () => stepHistory(-1);
+  const redo = () => stepHistory(1);
 
   /* ------------------------------------------------------------------ *
    * 3. UI
@@ -780,10 +799,20 @@
   let jumpState = { token: '', i: 0 };
   let lastRenderKey = '';      // 当前面板内容对应的「编辑器 + 素材」指纹
 
+  // 节点/编辑器身份：必须跨 React 重渲染稳定，否则历史会碎成多个桶、撤销对不上。
+  // 站点未暴露 nodeId，退而用参考素材签名（同一节点的素材集合稳定；改素材即换节点语义）。
+  function refsSig(a) {
+    return ((a && a.refs) || [])
+      .map((r) => (r.id || r.assetFileId || r.assetFileUuid || '') + ':' + (r.assetName || r.nodeTitle || r.name || ''))
+      .join('|');
+  }
   function nodeKey(a) {
     const p = (a && a.props) || {};
     const nid = p.nodeId || p.nodeUuid || (p.node && p.node.id) || '';
-    return nid ? 'n:' + nid : 'e:' + elId(a.el);
+    if (nid) return 'n:' + nid;
+    const sig = refsSig(a);
+    if (sig) return 'r:' + sig;
+    return 'e:' + elId(a.el);   // 无素材时的兜底：随 DOM 变化，不保证稳定
   }
 
   // 面板内容指纹：节点 id + 参考素材（id/名字）。切节点、增删素材都会变。
@@ -1179,12 +1208,22 @@
   function jumpToken(token) { jumpNeedle('@' + token, token); }
   /* ---------------- 历史 ---------------- */
   // 手动改动（不经插件写回）只在切到历史页时收录，渲染本身不改档
+  // 应用写回后会补尾部换行 / 零宽字符，比较前先归一：
+  // 否则「格式化差异」会被当成「用户手动改过」，导致撤销变成存快照后原地跳。
+  function normText(v) {
+    return String(v == null ? '' : v)
+      .replace(/[\u200b-\u200d\ufeff]/g, '')
+      .replace(/[ \t]+$/gm, '')
+      .replace(/\n+$/, '');
+  }
+  function sameText(x, y) { return normText(x) === normText(y); }
+
   function captureManualEdit() {
     const a = api();
     if (!a) return;
     syncHistory(a);
     const cur = serialize(a.el);
-    if (HIST.idx >= 0 && HIST.list[HIST.idx] && HIST.list[HIST.idx].text !== cur) pushHistory(cur, '当前内容（手动改过）');
+    if (HIST.idx >= 0 && HIST.list[HIST.idx] && !sameText(HIST.list[HIST.idx].text, cur)) pushHistory(cur, '当前内容（手动改过）');
   }
 
   function renderHistory(body, a) {

@@ -2,12 +2,13 @@
 import { connect, attach, ev, send, close } from './lib.mjs';
 import fs from 'node:fs';
 
-const T = fs.readFileSync('find_real_target.txt', 'utf8').trim();
 const SRC = fs.readFileSync('../tiaoyue-ref-helper-ext/content.js', 'utf8');
-const ORIG = fs.readFileSync('real_find_orig.txt', 'utf8');
 
 await connect();
-const s = await attach(T);
+const tgt = (await send('Target.getTargets')).targetInfos.find((x) => x.type === 'page' && x.url.includes('01a1a6465e567b8f8dbbebc21a0c88bf'));
+if (!tgt) { console.log('目标画布页未打开'); process.exit(0); }
+const s = await attach(tgt.targetId);
+const ORIG = await ev(s, '__TYQ.serialize(__TYQ.api().el)');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (n, ok, d = '') => { results.push({ n, ok }); console.log((ok ? 'PASS' : 'FAIL') + ' | ' + n + (d ? ' | ' + d : '')); };
@@ -33,7 +34,7 @@ const typeFind = async (v) => {
 };
 
 // 2) 计数与高亮：用正文里真实出现的词
-const q = '全程';
+const q = '维多利亚';
 const expectCount = ORIG.split(q).length - 1;
 await typeFind(q);
 check(`计数与原文一致（${expectCount} 处）`, (await info()).includes(`共 ${expectCount} 处匹配`), await info());
