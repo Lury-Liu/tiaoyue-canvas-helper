@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.10.2
+// @version      1.11.0
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -30,7 +30,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.10.2';
+  const TYQ_VERSION = '1.11.0';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -363,7 +363,10 @@
     syncHistory(a);
     const cur = serialize(a.el);
     if (cur === text) return false;
-    if (a.maxLength && text.length > a.maxLength) { toast('超出长度上限'); return false; }
+    if (a.maxLength && text.length > a.maxLength) {
+      toast(`超出长度上限：将变成 ${text.length} 字，上限 ${a.maxLength} 字（多 ${text.length - a.maxLength} 字）`, 3200);
+      return false;
+    }
     if (HIST.list[HIST.idx].text !== cur) pushHistory(cur, '手动编辑');
     if (!a.set(text)) { toast('写入失败：请重新双击节点后再试'); return false; }
     pushHistory(text, label || '编辑');
@@ -473,8 +476,10 @@
     border-radius:5px;padding:0 5px;line-height:16px;cursor:help}
   .tyq-fbox{border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:4px 6px;margin-top:6px;
     background:rgba(255,255,255,.02);max-height:132px;overflow:auto}
-  .tyq-fmatch{display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:12px;border-radius:6px;cursor:pointer}
-  .tyq-fmatch:hover{background:rgba(96,165,250,.12)}
+  .tyq-fmatch,.tyq-pickrow{display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:12px;border-radius:6px;cursor:pointer}
+  .tyq-fmatch:hover,.tyq-pickrow:hover{background:rgba(96,165,250,.12)}
+  .tyq-pickrow.on{background:rgba(96,165,250,.18);box-shadow:inset 0 0 0 1px rgba(96,165,250,.35)}
+  .tyq-hint-inline{color:#fbbf24}
   /* 隐藏画布自带的"跳跃AI"悬浮助手（gc-float 触发钮 + 面板），只保留本插件 */
   .gc-float{display:none!important}
   .tyq-help{flex:none;cursor:pointer;color:#9ca3af;width:18px;height:18px;border-radius:9px;
@@ -1247,6 +1252,8 @@
     if (hlLayer) { hlLayer.remove(); hlLayer = null; }
   }
 
+  const HL_CAP = 300;   // 查找高亮上限：超出的命中只计数不铺框
+
   function drawFindHL(ranges, activeIdx, ed) {
     clearFindHL();
     if (!alive || !ranges.length) return;
@@ -1316,18 +1323,66 @@
     r.value = findState.rep;
     body.appendChild(r);
 
-    const sel = el('select', 'tyq-input');
-    sel.style.marginTop = '6px';
-    const opt0 = document.createElement('option');
-    opt0.value = ''; opt0.textContent = '替换为普通文本';
-    sel.appendChild(opt0);
-    index.forEach((it) => {
-      const o = document.createElement('option');
-      o.value = it.token; o.textContent = `替换为引用：${it.name}（${it.token}）`;
-      sel.appendChild(o);
+    // 替换目标：可搜索的引用选择器（原下拉框素材多时找不到）
+    const pickBtn = el('button', 'tyq-btn tyq-pickbtn');
+    pickBtn.style.cssText = 'margin-top:6px;width:100%;text-align:left';
+    const pickBox = el('div', 'tyq-fbox tyq-pickbox');
+    pickBox.style.display = 'none';
+    const pickSearch = el('input', 'tyq-input');
+    pickSearch.placeholder = '搜索素材名字 / 编号，点一项设为替换目标';
+    const pickList = el('div', '');
+    pickBox.appendChild(pickSearch);
+    pickBox.appendChild(pickList);
+    body.appendChild(pickBtn);
+    body.appendChild(pickBox);
+
+    const refItem = () => index.find((x) => x.token === findState.useRef) || null;
+    const repValue = () => (findState.useRef ? '@' + findState.useRef : r.value);
+    const drawPick = () => {
+      pickList.innerHTML = '';
+      const q = pickSearch.value.trim().toLowerCase();
+      const rows = index.filter((it) => !q || it.name.toLowerCase().includes(q) || it.bare.toLowerCase().includes(q) || it.token.toLowerCase().includes(q));
+      const clear = el('div', 'tyq-pickrow');
+      clear.appendChild(el('span', 'tyq-mname', '改用普通文本（清空选择）'));
+      clear.addEventListener('click', () => { findState.useRef = ''; pickBox.style.display = 'none'; syncPick(); });
+      if (!q) pickList.appendChild(clear);
+      if (!rows.length) { pickList.appendChild(el('div', 'tyq-empty', '没有匹配的素材')); return; }
+      rows.slice(0, 40).forEach((it) => {
+        const row = el('div', 'tyq-pickrow' + (it.token === findState.useRef ? ' on' : ''));
+        row.appendChild(el('span', 'tyq-token', it.token));
+        row.appendChild(el('span', 'tyq-mname', it.name));
+        row.addEventListener('click', () => {
+          findState.useRef = it.token;
+          pickBox.style.display = 'none';
+          pickSearch.value = '';
+          syncPick();
+        });
+        pickList.appendChild(row);
+      });
+      if (rows.length > 40) pickList.appendChild(el('div', 'tyq-hint', `还有 ${rows.length - 40} 个，输入更精确的关键词`));
+    };
+    const syncPick = () => {
+      const it = refItem();
+      pickBtn.textContent = it ? `替换为引用：${it.name}（${it.token}） ▾` : '替换为：普通文本 ▾';
+      r.disabled = !!it;
+      r.placeholder = it ? '已选择引用，此框忽略' : '替换为…（留空 = 删除）';
+      drawPick();
+    };
+    pickBtn.addEventListener('click', () => {
+      const open = pickBox.style.display !== 'none';
+      pickBox.style.display = open ? 'none' : 'block';
+      if (!open) { drawPick(); pickSearch.focus(); }
     });
-    sel.value = findState.useRef || '';
-    body.appendChild(sel);
+    pickSearch.addEventListener('input', drawPick);
+    pickSearch.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        const first = pickList.querySelector('.tyq-fmatch');
+        if (first) first.click();
+      }
+    });
+    findState.useRef = findState.useRef || '';
+    syncPick();
 
     const icRow = el('label', 'tyq-check');
     const ic = document.createElement('input');
@@ -1352,13 +1407,12 @@
     body.appendChild(row1);
 
     // 素材名匹配：查的不只是正文，素材名字也能搜到，点一下定位到正文里的引用
-    const hitsOf = (q) => {
+    const hitsAll = (q) => {
       if (!q) return [];
       const lq = q.toLowerCase();
-      return index
-        .filter((it) => it.name.toLowerCase().includes(lq) || it.bare.toLowerCase().includes(lq))
-        .slice(0, 8);
+      return index.filter((it) => it.name.toLowerCase().includes(lq) || it.bare.toLowerCase().includes(lq));
     };
+    const hitsOf = (q) => hitsAll(q).slice(0, 8);
 
     const renderAssetHits = (q) => {
       assetBox.innerHTML = '';
@@ -1386,6 +1440,8 @@
         box.appendChild(row);
       });
       assetBox.appendChild(box);
+      const more = hitsAll(q).length - hits.length;
+      if (more > 0) assetBox.appendChild(el('div', 'tyq-hint', `还有 ${more} 个匹配素材，输入更精确的关键词`));
     };
 
     // 统一刷新：计数 + 素材名匹配 + 正文高亮（当前命中加蓝框）
@@ -1400,10 +1456,13 @@
         info.innerHTML = '未找到匹配' + (hitsOf(q).length ? '（正文里没有，但有同名素材，见下方）' : '');
       } else {
         info.innerHTML = `共 <span class="tyq-count">${positions.length}</span> 处匹配` +
-          (cur >= 0 ? ` · 当前第 <span class="tyq-count">${cur + 1}</span>/${positions.length} 处` : ' · 回车跳到第 1 处');
+          (cur >= 0 ? ` · 当前第 <span class="tyq-count">${cur + 1}</span>/${positions.length} 处` : ' · 回车跳到第 1 处') +
+          (positions.length > HL_CAP ? ` · <span class="tyq-hint-inline">高亮仅前 ${HL_CAP} 处</span>` : '');
       }
+      repAll.textContent = positions.length ? `全部替换 (${positions.length})` : '全部替换';
+      repAll.disabled = !positions.length;
       renderAssetHits(q);
-      const shown = positions.slice(0, 300);
+      const shown = positions.slice(0, HL_CAP);
       if (cur >= shown.length) shown[shown.length - 1] = positions[cur];
       const model = offsetModel(a.el);
       const ranges = shown.map((at) => rangeFromOffset(a.el, at, at + q.length, model));
@@ -1439,26 +1498,49 @@
       refresh(text);
     };
 
+    // 跳到某处匹配：选中 + 滚动，供替换后自动前进复用
+    const gotoSel = (at, q) => {
+      const range = rangeFromOffset(a.el, at, at + q.length);
+      if (!range) return;
+      const sel2 = editorSelection(a.el);
+      sel2.removeAllRanges();
+      sel2.addRange(range);
+      scrollRangeIntoView(range);
+    };
+
     const doReplace = () => {
       const text = serialize(a.el);
       const q = f.value;
       if (!q) return;
-      const rep = sel.value ? '@' + sel.value : r.value;
+      const rep = repValue();
+      if (!rep && !findState.useRef) { toast('替换内容为空：将删除匹配文字'); }
       const positions = allPositions(text, q, ic.checked);
       if (!positions.length) { toast('未找到匹配'); return; }
       let at = findState.last;
       if (!positions.includes(at)) at = positions[0];
       const out = text.slice(0, at) + rep + text.slice(at + q.length);
       if (!writeText(out, '替换 1 处', key)) return;
+      // 替换后自动前进到下一处：形成「替换 → 继续」的连续手感
       const remaining = allPositions(out, q, ic.checked);
-      findState.last = remaining.find((pos) => pos >= at + rep.length) ?? remaining[0] ?? -1;
+      const nextAt = remaining.find((pos) => pos >= at + rep.length) ?? remaining[0] ?? -1;
+      findState.last = nextAt;
+      setTimeout(() => {
+        if (!alive) return;
+        if (nextAt >= 0) {
+          gotoSel(nextAt, q);
+          toast(`已替换 1 处 · 还剩 ${remaining.length} 处`, 1600);
+        } else {
+          toast('已替换最后 1 处', 1600);
+        }
+        if (findRefreshHook) findRefreshHook();
+      }, 180);
     };
 
     const doReplaceAll = () => {
       const text = serialize(a.el);
       const q = f.value;
       if (!q) return;
-      const rep = sel.value ? '@' + sel.value : r.value;
+      const rep = repValue();
       const positions = allPositions(text, q, ic.checked);
       const n = positions.length;
       if (!n) { toast('未找到匹配'); return; }
@@ -1467,12 +1549,11 @@
       out += text.slice(pos);
       if (!writeText(out, `替换 ${n} 处`, key)) return;
       findState.last = -1;
-      toast(`已替换 ${n} 处，Alt+Z 可撤销`);
+      toast(`已替换 ${n} 处（${text.length} → ${out.length} 字），Alt+Z 可撤销`, 2600);
     };
 
     f.addEventListener('input', () => { findState.find = f.value; findState.last = -1; refresh(); });
     r.addEventListener('input', () => { findState.rep = r.value; });
-    sel.addEventListener('change', () => { findState.useRef = sel.value; });
     ic.addEventListener('change', () => { findState.ic = ic.checked; findState.last = -1; refresh(); });
     [f, r].forEach((inp) => inp.addEventListener('keydown', (e) => {
       e.stopPropagation();

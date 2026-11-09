@@ -2,7 +2,7 @@
 
 > 浏览器扩展（Edge/Chrome MV3）+ 油猴脚本：在 [www.tiaoyue.com](https://www.tiaoyue.com) 画布提示词框里，把素材名字转成 `@图片N` 引用，并支持已引用清单定位、撤销历史、查找替换。
 >
-> 仓库：`https://github.com/Lury-Liu/tiaoyue-canvas-helper` · 分支 `main` · 当前版本 **1.10.2**
+> 仓库：`https://github.com/Lury-Liu/tiaoyue-canvas-helper` · 分支 `main` · 当前版本 **1.11.0**
 > 历史修复记录与技术债：[ISSUES.md](./ISSUES.md)
 
 ---
@@ -25,7 +25,7 @@
 | 勾选跳过 / 预览 | 检出清单取消勾选即跳过；写回前可预览结果 |
 | 已引用清单 | 列出正文里的 `@图片N`，点击定位 + 高亮，重复点击跳下一处 |
 | 撤销 / 重做 | `Alt+Z` / `Alt+Shift+Z`，按节点归档，最多 20 步 |
-| 查找替换 | `Ctrl+F`：全部命中高亮、回车/Shift+回车逐个跳转（首尾循环并提示）、默认忽略大小写、素材名也能搜、通用文件名（image.png 等）标注 |
+| 查找替换 | `Ctrl+F`：全部命中高亮（超 300 处提示仅高亮前 300）、回车/Shift+回车逐个跳转（首尾循环）、默认忽略大小写、素材名也能搜（超 8 条提示收窄关键词）、通用文件名标注；替换后自动前进到下一处；「全部替换」显示命中数量；替换目标为**可搜索**的素材选择器 |
 | 面板拖动 | 面板与悬浮球均可拖，位置本地记忆，双击标题栏复位 |
 | 切节点自动刷新 | 面板打开时切节点，素材列表 ≤0.4s 自动跟随 |
 | 自动更新 | 每次进入画布检查 GitHub 并热替换（无需刷新）；断网回退内置版 |
@@ -101,8 +101,8 @@
 **开发**：无 npm 依赖，改完源码执行 `node tools/build.js`。
 
 ```bash
-node tools/build.js 1.10.2        # 提升 manifest / version.json / @version / TYQ_VERSION，再生成 content.js
-git add -A && git commit -m "v1.10.2" && git push
+node tools/build.js 1.11.0        # 提升 manifest / version.json / @version / TYQ_VERSION，再生成 content.js
+git add -A && git commit -m "v1.11.0" && git push
 ```
 
 - 其他机器：进入画布即自动检查（loader 最多 1h 一次，content 自检查每次进画布都跑）；或弹窗点「立即检查更新」。

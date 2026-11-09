@@ -129,7 +129,13 @@ try {
     await pageSend('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
     await pause(450);
   };
-  const clickButton = (label) => click(`[...document.querySelectorAll('.tyq-panel .tyq-btn')].find(b=>b.textContent===${JSON.stringify(label)})`);
+  const clickButton = (label) => click(`(()=>{
+    const btns = [...document.querySelectorAll('.tyq-panel .tyq-btn')];
+    const t = (b) => b.textContent.trim();
+    return btns.find((b) => t(b) === ${JSON.stringify(label)})
+      || btns.find((b) => t(b).replace(/\\s*\\(\\d+\\)$/, '') === ${JSON.stringify(label)})
+      || null;
+  })()`);
   const convert = () => click(`document.querySelector('.tyq-panel .tyq-btn.primary')`);
   const switchNode = (node) => click(`document.getElementById('fake-node-${node}')`);
   const history = async (method) => { await ev(`__TYQ.${method}()`); await pause(450); };
@@ -226,14 +232,26 @@ try {
     equal('N1 节点A素材名对应图片2', await ev(`document.querySelector('.tyq-fmatch .tyq-token').textContent`), '图片2');
     const aBefore = await state('A');
     await switchNode('B');
-    const options = await ev(`[...document.querySelector('select.tyq-input').options].slice(1).map(o=>({value:o.value,text:o.textContent}))`);
+    // 打开「替换为」候选，读 B 节点自己的素材列表（首行是"改用普通文本"）
+    await ev(`document.querySelector('.tyq-pickbtn').click(); 1`);
+    await pause(120);
+    const options = await ev(`[...document.querySelectorAll('.tyq-pickrow')].slice(1).map(r=>({
+      value: r.querySelector('.tyq-token').textContent,
+      text: r.querySelector('.tyq-mname').textContent,
+    }))`);
     equal('N2 不重开查找页即刷新为B的独立素材索引', options, [
-      { value: '图片1', text: '替换为引用：巴迪-狗形态.png（图片1）' },
-      { value: '图片2', text: '替换为引用：B独有-场景.png（图片2）' },
+      { value: '图片1', text: '巴迪-狗形态.png' },
+      { value: '图片2', text: 'B独有-场景.png' },
     ]);
     const hits = await ev(`[...document.querySelectorAll('.tyq-fmatch')].map(e=>e.innerText.replace(/\\s+/g,' '))`);
     check('N3 查询保留且素材引用次数来自B', hits.length === 1 && /图片1/.test(hits[0]) && /正文×1/.test(hits[0]) && /共 2 处匹配/.test(await infoText()), JSON.stringify(hits));
-    await ev(`(()=>{const select=document.querySelector('select.tyq-input'); select.focus(); select.value='图片2'; select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await ev(`(()=>{
+      const box = document.querySelector('.tyq-pickbox');
+      if (box && box.style.display === 'none') document.querySelector('.tyq-pickbtn').click();
+      const row = [...document.querySelectorAll('.tyq-pickrow')].find((r) => (r.textContent || '').includes('图片2'));
+      if (row) row.click();
+      return !!row;
+    })()`);
     await clickButton('替换');
     await expectText('N4 单条替换只使用B正文和B素材', 'B正文 @图片2在跑，巴迪收尾 @图片1', 'B');
     equal('N5 单条替换后A的正文、DOM和模型不变', await state('A'), aBefore);
