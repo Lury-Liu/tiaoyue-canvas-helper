@@ -47,7 +47,7 @@
 ├─ tiaoyue-ref-helper.user.js        # 唯一源码（油猴脚本，也可直装 Tampermonkey）
 ├─ tiaoyue-ref-helper-ext/           # MV3 扩展
 │  ├─ config.js                      # 仓库地址（转手必改）
-│  ├─ loader.js                      # 隔离世界：每小时查更新，blob 注入主世界
+│  ├─ loader.js                      # 隔离世界：每小时查更新 → 只记录状态（不注入）
 │  ├─ content.js                     # 构建产物，勿手改
 │  ├─ manifest.json / version.json   # 内置版 / 线上版
 │  ├─ popup.html / popup.js          # 弹窗：版本、更新状态、快捷键
@@ -88,7 +88,7 @@
 | 查找高亮 | `drawFindHL()` 在滚动、尺寸或查找内容变化时按需重画（≤300），当前命中始终保留；偏移映射每次刷新只构建一次 |
 | 历史 | 按节点保存最多 20 个快照；写回及历史跳转校验所属节点，手动改稿在覆盖前留档 |
 | 路由 | SPA：`CANVAS_ROUTE='/aigc/canvas/'` + `pushState/popstate/hashchange` 钩子启停；`teardown()` 清 UI |
-| 热更新 | 双通道：`loader.js`（隔离世界，1h 一次，chrome.storage 离线兜底）+ `selfUpdate()`（主世界自带，**每次进画布**）。新版 blob 注入 + `__TYQ_FORCE_ONCE` 接管，旧实例靠 `alive` / `__TYQ_DISPOSE__` 停监听 |
+| 热更新 | 由 `content.js` 的 `selfUpdate()` 执行（**MAIN world，每次进画布**）：拉 `version.json` → blob 注入新版 + `__TYQ_FORCE_ONCE` 接管，旧实例靠 `alive` / `__TYQ_DISPOSE__` 停监听。`loader.js` 只做 1h 节流检查并记录状态——**隔离世界插入的 `<script>` 不会在主世界执行**，所以它不负责注入 |
 
 **高风险依赖**：`_promptEditor_` 类名、React fiber props 结构、wujie 挂载方式。任一处变更都可能让 `api()` 返回 `null`（面板提示「未找到提示词输入框」）。
 
@@ -105,7 +105,8 @@ node tools/build.js 1.11.0        # 提升 manifest / version.json / @version / 
 git add -A && git commit -m "v1.11.0" && git push
 ```
 
-- 其他机器：进入画布即自动检查（loader 最多 1h 一次，content 自检查每次进画布都跑）；或弹窗点「立即检查更新」。
+- 其他机器：进入画布即自动检查（`selfUpdate()` 每次进画布都跑，loader 侧最多 1h 一次）；或弹窗点「立即检查更新」。
+- **推送后别急着测**：raw.githubusercontent 的 CDN 需要几十秒刷新，刚推完立刻拉可能还是旧版本，容易误判成"更新失败"。
 - 不带参数运行 build.js 只按当前 manifest 版本重新生成 content.js。
 
 ---
