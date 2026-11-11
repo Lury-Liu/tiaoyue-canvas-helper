@@ -108,6 +108,10 @@
 ## 4. 安装与发布
 
 **终端用户（扩展）**：`edge://extensions` → 开「开发人员模式」→「加载解压缩的扩展」→ 选 `tiaoyue-ref-helper-ext`；之后自动更新。
+
+**直接拿安装包**：到 [Releases](https://github.com/Lury-Liu/tiaoyue-canvas-helper/releases) 下载 `tiaoyue-ref-helper-ext.zip`，解压后按上面的方式「加载解压缩的扩展」。
+> 注意：从 zip 装的扩展**不会自动更新**（没有 `update_url`），想跟随更新请用仓库目录加载。
+
 **油猴**：安装 `tiaoyue-ref-helper.user.js`。
 **开发**：无 npm 依赖，改完源码执行 `node tools/build.js`。
 
