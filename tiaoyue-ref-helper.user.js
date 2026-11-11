@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.20.3
+// @version      1.21.1
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -33,7 +33,7 @@
  *      12.1 URL 与命名   缩略图 -> 原图直链，alt -> 文件名
  *      12.2 范围扫描    当前片段 / 角色详情 / 整页
  *      12.3 单张保存
- *      12.4 批量下载    扩展直接写「下载/<子目录>/」，无弹窗、不打包
+ *      12.4 批量下载    扩展写「下载/第N集/」，同名已存在则跳过
  *      12.6 悬浮按钮    可拖动、记忆位置
  *      12.7 卡片角标    资产卡单张下载
  *      12.8 生命周期    路由启停、样式注入
@@ -55,7 +55,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); stopAssetDL(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.20.3';
+  const TYQ_VERSION = '1.21.1';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -1979,18 +1979,10 @@
     return '';
   }
 
-  // 目标子目录：「素材-第12集-片段1-20261111-1435」
-  function folderName(scope) {
-    const d = new Date();
-    const p = (n) => String(n).padStart(2, '0');
-    const stamp = '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
-    if (scope === 'detail') return '素材-' + stamp;
-    const parts = [];
-    const ep = pickText(/^第\d+集$/);
-    const clip = pickText(/^片段\s*\d+/);
-    if (ep) parts.push(ep);
-    if (clip) parts.push(clip);
-    return (parts.length ? '素材-' + parts.join('-') : '素材') + '-' + stamp;
+  /* 目标子目录：只按集数命名（「第12集」），同一集的所有片段共用一个文件夹，
+   * 复用素材只下一次；拿不到集名时退回「素材」。 */
+  function folderName() {
+    return pickText(/^第\d+集$/) || '素材';
   }
 
   function extOfUrl(u) {
@@ -2034,7 +2026,7 @@
     const total = list.length;
     const used = new Map();
     const failed = [];
-    let ok = 0;
+    let ok = 0, skipped = 0;
 
     for (let i = 0; i < total; i++) {
       const it = list[i];
@@ -2048,7 +2040,8 @@
         used.set(name, 1);
       }
       const r = await submitDownload(it.url, folder + '/' + name);
-      if (r.ok) ok++;
+      if (r.ok && r.skipped) skipped++;
+      else if (r.ok) ok++;
       else failed.push(it.name);
     }
 
@@ -2056,9 +2049,18 @@
     btn.disabled = false;
     btn.textContent = label + total + ')';
 
-    if (ok && !failed.length) toast('已保存 ' + ok + ' 张到「下载/' + folder + '」', 4600);
-    else if (ok) toast('已保存 ' + ok + ' 张，失败 ' + failed.length + '：' + failed.slice(0, 3).join('、'), 4600);
-    else toast('下载未开始：请到 edge://extensions 重新加载扩展后重试', 4800);
+    if (!ok && !skipped) {
+      toast('下载未开始：请到 edge://extensions 重新加载扩展后重试', 4800);
+    } else if (!ok) {
+      toast(total + ' 张都已在「下载/' + folder + '」，未重复下载', 4200);
+    } else if (!skipped && !failed.length) {
+      toast('已保存 ' + ok + ' 张到「下载/' + folder + '」', 4600);
+    } else {
+      const bits = ['新增 ' + ok + ' 张'];
+      if (skipped) bits.push('跳过 ' + skipped + ' 张（已存在）');
+      if (failed.length) bits.push('失败 ' + failed.length + '：' + failed.slice(0, 3).join('、'));
+      toast(bits.join('，') + ' → 下载/' + folder, 5200);
+    }
   }
 
   /* ---- 12.6 悬浮按钮（可拖动 + 记忆位置） ---- */
