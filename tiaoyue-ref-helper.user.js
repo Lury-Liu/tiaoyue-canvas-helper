@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.13.4
+// @version      1.14.0
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -30,7 +30,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.13.4';
+  const TYQ_VERSION = '1.14.0';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -1850,14 +1850,30 @@
     return '';
   }
 
-  // 详情弹窗打开时只扫弹窗，避免混进列表里的角色总览图
-  function scanRoot() {
+  // 当前激活的「当前片段」面板：这里才是本片段实际用到的素材
+  function activeClipPanel(sr) {
+    const tab = Array.from(sr.querySelectorAll('.maiya-underline-tabs__tab'))
+      .find((b) => b.classList.contains('is-active') && /当前片段/.test(b.innerText || ''));
+    return tab ? (tab.closest('.maiya-underline-tabs')?.parentElement || null) : null;
+  }
+
+  /* 扫描范围优先级：
+   * 1) 角色详情弹窗（每个状态各有 alt 原名）
+   * 2) 激活的「当前片段」面板（本片段实际引用的素材）
+   * 3) 整页兜底
+   */
+  function scanScope() {
     const sr = SHADOW();
-    return (sr && sr.querySelector('.detailLayer')) || sr || document;
+    if (!sr) return { root: document, scope: 'page' };
+    const layer = sr.querySelector('.detailLayer');
+    if (layer) return { root: layer, scope: 'detail' };
+    const clip = activeClipPanel(sr);
+    if (clip && clip.querySelectorAll('img').length) return { root: clip, scope: 'clip' };
+    return { root: sr, scope: 'page' };
   }
 
   function scanMaterials(root) {
-    const r = root || scanRoot();
+    const r = root || scanScope().root;
     const map = new Map();   // 原图 URL 去重
     for (const img of r.querySelectorAll('img')) {
       const src = img.currentSrc || img.src || '';
@@ -2014,10 +2030,13 @@
     }
   }
 
-  async function downloadList(list, btn) {
+  async function downloadList(list, btn, scope) {
     if (assetBatchBusy) return;
     assetBatchBusy = true;
     btn.disabled = true;
+    const label = scope === 'clip' ? '下载当前片段 ('
+      : scope === 'detail' ? '下载本弹窗 ('
+        : '下载素材 (';
     const total = list.length;
     const files = [];
     const used = new Map();
@@ -2049,7 +2068,7 @@
     }
     assetBatchBusy = false;
     btn.disabled = false;
-    btn.textContent = '下载素材 (' + total + ')';
+    btn.textContent = label + total + ')';
     toast(files.length
       ? ('已打包 ' + files.length + ' 张' + (fail ? '，失败 ' + fail : ''))
       : '没有可下载的素材', 3600);
@@ -2062,7 +2081,11 @@
     ensureAssetStyle(sr);
     Array.from(sr.querySelectorAll('li.card')).forEach(decorateCard);
 
-    const list = scanMaterials();
+    const sc = scanScope();
+    const list = scanMaterials(sc.root);
+    const label = sc.scope === 'clip' ? '下载当前片段 ('
+      : sc.scope === 'detail' ? '下载本弹窗 ('
+        : '下载素材 (';
     let all = document.querySelector('.tyq-dlall');
     if (!list.length) {
       if (all && !assetBatchBusy) all.remove();
@@ -2072,14 +2095,15 @@
       all = document.createElement('button');
       all.type = 'button';
       all.className = 'tyq-dlall';
-      all.title = '下载当前页面（或打开的详情）内所有素材，文件名=原名';
+      all.title = '下载当前范围内所有素材（当前片段 / 角色详情 / 整页），按原名打包 zip';
       all.addEventListener('click', () => {
-        const cur = scanMaterials();
-        if (cur.length) downloadList(cur, all);
+        const cur = scanScope();
+        const curList = scanMaterials(cur.root);
+        if (curList.length) downloadList(curList, all, cur.scope);
       });
       document.body.appendChild(all);
     }
-    if (!assetBatchBusy) all.textContent = '下载素材 (' + list.length + ')';
+    if (!assetBatchBusy) all.textContent = label + list.length + ')';
   }
 
   function startAssetDL() {
