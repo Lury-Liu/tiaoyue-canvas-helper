@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.18.0
+// @version      1.18.1
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -55,7 +55,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); stopAssetDL(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.18.0';
+  const TYQ_VERSION = '1.18.1';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -92,10 +92,15 @@
       URL.revokeObjectURL(url);
       window.postMessage({ __tyq: 'code-applied', ver }, '*');
     };
+    s.onerror = () => {
+      if (lastApplied === ver) lastApplied = '';           // 注入失败允许下次重试
+      URL.revokeObjectURL(url);
+    };
     (document.head || document.documentElement).appendChild(s);
   }
 
   window.addEventListener('message', (e) => {
+    if (!alive) return;            // 热更新后旧实例的监听仍在，这里断掉，避免重复注入
     const d = e && e.data;
     if (!d || typeof d !== 'object' || d.__tyq !== 'apply-code') return;
     applyRemoteCode(String(d.ver || ''), String(d.code || ''));
@@ -121,13 +126,9 @@
       if (!online || verCmp(online, TYQ_VERSION) <= 0) return;
       const code = await (await fetch(`${base}/${meta.file || 'tiaoyue-ref-helper-ext/content.js'}?t=${Date.now()}`, { cache: 'no-store' })).text();
       if (code.length < 5000 || !code.includes('__TYQ')) return;
-      toast(`发现新版 v${online}，已自动更新`, 2500);
-      const blob = new Blob(['window.__TYQ_FORCE_ONCE=true;\n', code], { type: 'text/javascript' });
-      const url = URL.createObjectURL(blob);
-      const s = document.createElement('script');
-      s.src = url;
-      s.onload = () => URL.revokeObjectURL(url);
-      (document.head || document.documentElement).appendChild(s);
+      if (lastApplied === online) return;                  // 推送通道已注入同一版本
+      toast(`发现新版 v${online}，正在更新`, 2000);
+      applyRemoteCode(online, code);                       // 统一注入入口，共享去重
     } catch (e) { /* 网络失败等：静默，本版本继续 */ } finally {
       updBusy = false;
     }

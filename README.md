@@ -99,7 +99,7 @@
 | 查找高亮 | `drawFindHL()` 在滚动、尺寸或查找内容变化时按需重画（≤300），当前命中始终保留；偏移映射每次刷新只构建一次 |
 | 历史 | 按节点保存最多 20 个快照；写回及历史跳转校验所属节点，手动改稿在覆盖前留档 |
 | 路由 | SPA：`CANVAS_ROUTE='/aigc/canvas/'` + `pushState/popstate/hashchange` 钩子启停；`teardown()` 清 UI |
-| 热更新 | **下载在隔离世界、注入在主世界**：`loader.js` 1h 节流检查，发现新版就把 `content.js` 拉下来存进 `chrome.storage`（扩展上下文 fetch 不受页面 CORS/网络策略影响），并用 `postMessage` 推给主世界；`content.js` 收到后 blob 注入 + `__TYQ_FORCE_ONCE` 接管，旧实例靠 `alive` / `__TYQ_DISPOSE__` 停监听。主世界启动会发 `want-code` 索取缓存，**断网也能用上已下载的版本**。`selfUpdate()` 保留为兜底（主世界直连 GitHub） |
+| 热更新 | **下载在隔离世界、注入在主世界**：`loader.js` 1h 节流检查，发现新版就把 `content.js` 拉下来存进 `chrome.storage`（扩展上下文 fetch 不受页面 CORS/网络策略影响），并用 `postMessage` 推给主世界；`content.js` 收到后 blob 注入 + `__TYQ_FORCE_ONCE` 接管，旧实例靠 `alive` / `__TYQ_DISPOSE__` 停监听。主世界启动会发 `want-code` 索取缓存，**断网也能用上已下载的版本**。`selfUpdate()` 保留为兜底（主世界直连 GitHub），同样走 `applyRemoteCode` 统一入口；旧实例 `alive=false` 后不再响应下发，避免重复注入 |
 
 **高风险依赖**：`_promptEditor_` 类名、React fiber props 结构、wujie 挂载方式。任一处变更都可能让 `api()` 返回 `null`（面板提示「未找到提示词输入框」）。
 

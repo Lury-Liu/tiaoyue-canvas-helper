@@ -46,6 +46,7 @@ async function run({ storage = {}, remote = {}, httpFail = false } = {}) {
           return out;
         },
         set: async (obj) => { Object.assign(store, obj); },
+        remove: async (keys) => { for (const k of [].concat(keys)) delete store[k]; },
       },
       onChanged: { addListener: (fn) => { changeHandler = fn; } },
     },
@@ -189,6 +190,17 @@ console.log(`\n== 自动更新分发器回归（内置 v${BUNDLED}）==\n`);
   const r = await run({ storage: { 'tyq.upd.at': now }, remote: {} });
   await r.change({ 'tyq.upd.code': { newValue: GOOD_CODE }, 'tyq.upd.ver': { newValue: '9.9.9' } });
   ok('M 存储变更：推送给页面', r.pushed.some((p) => p.__tyq === 'apply-code' && p.ver === '9.9.9'));
+}
+
+
+/* O. 缓存不比内置新 → 清掉，且不推送 */
+{
+  const r = await run({
+    storage: { 'tyq.upd.code': GOOD_CODE, 'tyq.upd.ver': '1.0.0', 'tyq.upd.at': now },
+    remote: {},
+  });
+  ok('O 旧缓存：被清理', r.store['tyq.upd.code'] === undefined && r.store['tyq.upd.ver'] === undefined);
+  ok('O 旧缓存：不推送', r.pushed.length === 0, `pushed=${r.pushed.length}`);
 }
 
 /* N. 全程无未捕获的 Promise 拒绝 */

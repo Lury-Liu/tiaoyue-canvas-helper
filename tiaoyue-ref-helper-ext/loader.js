@@ -47,6 +47,7 @@
   const store = {
     get: (keys) => chrome.storage.local.get(keys),
     set: (obj) => chrome.storage.local.set(obj),
+    remove: (keys) => chrome.storage.local.remove(keys),
   };
 
   async function fetchText(url) {
@@ -119,6 +120,13 @@
   /* ==================== 主流程 ==================== */
   async function main() {
     const st = await store.get([K.at, K.code, K.ver]);
+
+    // 0) 缓存不比内置版新（例如手动装了新包）→ 清掉，别让旧缓存占着
+    if (st[K.code] && st[K.ver] && cmp(st[K.ver], BUNDLED) <= 0) {
+      await store.remove([K.code, K.ver]);
+      delete st[K.code];
+      delete st[K.ver];
+    }
 
     // 1) 先把缓存里的新版本推给页面（断网也能用上已下载的版本）
     if (st[K.code] && st[K.ver] && cmp(st[K.ver], BUNDLED) > 0) pushToPage(st[K.ver], st[K.code]);
