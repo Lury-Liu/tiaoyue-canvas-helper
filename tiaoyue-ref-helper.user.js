@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.12.2
+// @version      1.13.4
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -30,7 +30,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.12.2';
+  const TYQ_VERSION = '1.13.4';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -1824,10 +1824,139 @@
     return u.replace(/[?&]imageMogr2\/[^&]*/g, '').replace(/[?&]+$/, '');
   }
 
-  function assetName(card) {
-    const t = (card.querySelector('.cardTitle')?.textContent || '').trim();
-    const raw = t || (card.innerText || '').trim().split(/\s+/)[0] || '素材';
-    return raw.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80);
+  // 名字清洗：alt 里混着版本缩略图（V1/V2/Auto）与纯数字，不能当文件名
+  function cleanName(n) {
+    const s = String(n || '').trim().replace(/\s+/g, ' ');
+    if (!s || s.length < 2) return '';
+    if (/^v\d+$/i.test(s) || /^auto$/i.test(s) || /^\d+$/.test(s)) return '';
+    return s.replace(/[\\/:*?"<>|]/g, '_').replace(/[-_\s]+$/, '').slice(0, 90);
+  }
+
+  // 素材原名优先级：img.alt（详情里的子形象名）> 资产卡标题 > title 属性
+  function nameOfImg(img) {
+    const byAlt = cleanName(img.alt);
+    if (byAlt) return byAlt;
+    const card = img.closest('li.card');
+    const byCard = cleanName(card && card.querySelector('.cardTitle')?.textContent);
+    if (byCard) return byCard;
+    const byTitle = cleanName(img.getAttribute('title'));
+    if (byTitle) return byTitle;
+    let p = img.parentElement;
+    for (let i = 0; i < 4 && p; i++) {
+      const v = cleanName(p.getAttribute && p.getAttribute('title'));
+      if (v) return v;
+      p = p.parentElement;
+    }
+    return '';
+  }
+
+  // 详情弹窗打开时只扫弹窗，避免混进列表里的角色总览图
+  function scanRoot() {
+    const sr = SHADOW();
+    return (sr && sr.querySelector('.detailLayer')) || sr || document;
+  }
+
+  function scanMaterials(root) {
+    const r = root || scanRoot();
+    const map = new Map();   // 原图 URL 去重
+    for (const img of r.querySelectorAll('img')) {
+      const src = img.currentSrc || img.src || '';
+      if (!/myqcloud\.com/.test(src)) continue;
+      if (img.naturalWidth < 180 || img.naturalHeight < 100) continue;
+      const name = nameOfImg(img);
+      if (!name) continue;
+      const url = toOrigUrl(src);
+      if (!map.has(url)) map.set(url, { name, url, w: img.naturalWidth, h: img.naturalHeight });
+    }
+    return Array.from(map.values());
+  }
+
+  function extOfType(t) {
+    const s = String(t || '').split('/')[1] || 'png';
+    return '.' + s.replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+  }
+
+  /* 单张：fetch 成 blob 再存，文件名用原名。
+   * 批量不走这里——连续 a[download] 会被浏览器"多文件下载"策略拦掉只剩第一张。 */
+  async function saveItem(item) {
+    const res = await fetch(item.url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    saveBlob(await res.blob(), item.name);
+  }
+
+  /* ---------------- 打包 zip（store 模式，图片本身已压缩） ---------------- */
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      t[i] = c >>> 0;
+    }
+    return t;
+  })();
+
+  function crc32(u8) {
+    let c = 0xffffffff;
+    for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  }
+
+  function zipStore(files) {
+    const enc = new TextEncoder();
+    const parts = [];
+    const central = [];
+    let offset = 0;
+    for (const f of files) {
+      const nameU8 = enc.encode(f.name);
+      const crc = crc32(f.u8);
+      const size = f.u8.length;
+
+      const lh = new DataView(new ArrayBuffer(30));
+      lh.setUint32(0, 0x04034b50, true);
+      lh.setUint16(4, 20, true);
+      lh.setUint16(6, 0x0800, true);   // UTF-8 文件名
+      lh.setUint16(8, 0, true);        // store
+      lh.setUint32(14, crc, true);
+      lh.setUint32(18, size, true);
+      lh.setUint32(22, size, true);
+      lh.setUint16(26, nameU8.length, true);
+      parts.push(new Uint8Array(lh.buffer), nameU8, f.u8);
+
+      const ch = new DataView(new ArrayBuffer(46));
+      ch.setUint32(0, 0x02014b50, true);
+      ch.setUint16(4, 20, true);
+      ch.setUint16(6, 20, true);
+      ch.setUint16(8, 0x0800, true);
+      ch.setUint32(16, crc, true);
+      ch.setUint32(20, size, true);
+      ch.setUint32(24, size, true);
+      ch.setUint16(28, nameU8.length, true);
+      ch.setUint32(42, offset, true);
+      central.push(new Uint8Array(ch.buffer), nameU8);
+
+      offset += 30 + nameU8.length + size;
+    }
+    const cdStart = offset;
+    let cdSize = 0;
+    for (const c of central) { parts.push(c); cdSize += c.length; }
+
+    const eocd = new DataView(new ArrayBuffer(22));
+    eocd.setUint32(0, 0x06054b50, true);
+    eocd.setUint16(8, files.length, true);
+    eocd.setUint16(10, files.length, true);
+    eocd.setUint32(12, cdSize, true);
+    eocd.setUint32(16, cdStart, true);
+    parts.push(new Uint8Array(eocd.buffer));
+    return new Blob(parts, { type: 'application/zip' });
+  }
+
+  function saveCard(card) {
+    const img = card.querySelector('span.thumb img') || card.querySelector('img');
+    if (!img) throw new Error('该卡片没有图片');
+    return saveItem({
+      url: toOrigUrl(img.currentSrc || img.src),
+      name: cleanName(card.querySelector('.cardTitle')?.textContent) || '素材',
+    });
   }
 
   function saveBlob(blob, name) {
@@ -1840,14 +1969,6 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 15000);
-  }
-
-  async function saveAsset(card) {
-    const img = card.querySelector('span.thumb img') || card.querySelector('img');
-    if (!img) throw new Error('该卡片没有图片');
-    const res = await fetch(toOrigUrl(img.currentSrc || img.src));
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    saveBlob(await res.blob(), assetName(card));
   }
 
   function decorateCard(card) {
@@ -1864,7 +1985,7 @@
       b.disabled = true;
       b.textContent = '下载中';
       try {
-        await saveAsset(card);
+        await saveCard(card);
         b.textContent = '已保存';
       } catch (err) {
         b.textContent = '失败';
@@ -1893,20 +2014,45 @@
     }
   }
 
-  async function downloadAll(cards, btn) {
+  async function downloadList(list, btn) {
     if (assetBatchBusy) return;
     assetBatchBusy = true;
     btn.disabled = true;
-    let ok = 0, fail = 0;
-    for (let i = 0; i < cards.length; i++) {
-      try { await saveAsset(cards[i]); ok++; } catch (e) { fail++; }
-      btn.textContent = '下载中 ' + (i + 1) + '/' + cards.length;
-      await new Promise((r) => setTimeout(r, 260));
+    const total = list.length;
+    const files = [];
+    const used = new Map();
+    let fail = 0;
+    for (let i = 0; i < total; i++) {
+      const it = list[i];
+      btn.textContent = '打包中 ' + (i + 1) + '/' + total;
+      try {
+        const res = await fetch(it.url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const u8 = new Uint8Array(await res.arrayBuffer());
+        const ext = extOfType(res.headers.get('content-type'));
+        let name = it.name + ext;
+        if (used.has(name)) {
+          const n = used.get(name) + 1;
+          used.set(name, n);
+          name = it.name + '-' + n + ext;
+        } else {
+          used.set(name, 1);
+        }
+        files.push({ name, u8 });
+      } catch (e) { fail++; }
     }
-    btn.disabled = false;
-    btn.textContent = '全部原图 (' + cards.length + ')';
+    if (files.length) {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, '0');
+      const stamp = '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+      saveBlob(zipStore(files), '素材-' + stamp);
+    }
     assetBatchBusy = false;
-    toast('原图下载完成：成功 ' + ok + (fail ? '，失败 ' + fail : ''), 3200);
+    btn.disabled = false;
+    btn.textContent = '下载素材 (' + total + ')';
+    toast(files.length
+      ? ('已打包 ' + files.length + ' 张' + (fail ? '，失败 ' + fail : ''))
+      : '没有可下载的素材', 3600);
   }
 
   function assetTick() {
@@ -1914,26 +2060,26 @@
     const sr = SHADOW();
     if (!sr) return;
     ensureAssetStyle(sr);
-    const cards = Array.from(sr.querySelectorAll('li.card'));
-    if (!cards.length) {
-      document.querySelector('.tyq-dlall')?.remove();
+    Array.from(sr.querySelectorAll('li.card')).forEach(decorateCard);
+
+    const list = scanMaterials();
+    let all = document.querySelector('.tyq-dlall');
+    if (!list.length) {
+      if (all && !assetBatchBusy) all.remove();
       return;
     }
-    cards.forEach(decorateCard);
-
-    // 批量按钮：跟随资产库列表存在
-    let all = document.querySelector('.tyq-dlall');
     if (!all) {
       all = document.createElement('button');
       all.type = 'button';
       all.className = 'tyq-dlall';
+      all.title = '下载当前页面（或打开的详情）内所有素材，文件名=原名';
       all.addEventListener('click', () => {
-        const list = Array.from(SHADOW()?.querySelectorAll('li.card') || []);
-        if (list.length) downloadAll(list, all);
+        const cur = scanMaterials();
+        if (cur.length) downloadList(cur, all);
       });
       document.body.appendChild(all);
     }
-    if (!assetBatchBusy) all.textContent = '全部原图 (' + cards.length + ')';
+    if (!assetBatchBusy) all.textContent = '下载素材 (' + list.length + ')';
   }
 
   function startAssetDL() {

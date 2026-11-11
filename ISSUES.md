@@ -1,6 +1,6 @@
 # 画布引用助手 · 修复记录与技术债
 
-> 更新：2026-11-09 · 当前 **v1.12.2**
+> 更新：2026-11-09 · 当前 **v1.13.4**
 > 交接/架构/发布见 [README.md](./README.md)，本文只留「为什么这么改」和「还欠什么」。
 
 ---
@@ -32,6 +32,7 @@
 | v1.11.4 | 自动更新职责收敛：loader 只检查并记录状态，不再尝试注入；`window.__TYQ.version` 暴露运行版本便于诊断 | **隔离世界创建的 blob `<script>` 插入 DOM 后不会执行**（实测：标签在、无 onload、主世界无痕迹；同源主世界 blob 正常）。loader 之前的「已更新」是假成功，真正生效的一直是 content.js 的 selfUpdate |
 | v1.11.5 | 修复 `storage.get` 参数非法导致每次加载都抛 TypeError、更新检查全挂 | 删 `K.code` 时漏改 `store.get([K.code, ...])` → 数组含 `undefined`，Chrome 直接拒参。**改常量键名必须全量搜索引用**；回归沙箱要模拟 Chrome 的 keys 类型校验，否则测试恒绿 |
 | v1.12.2 | 创作页资产库新增原图下载：卡片右下角「原图」+ 右下角「全部原图 (N)」 | 缩略图 URL 的 `?imageMogr2/format/webp/thumbnail/600x` 整段去掉即原图直链（带签名的 COS URL 同样适用）；COS 允许 CORS，fetch 成 blob 可保住素材名；**shadow 内元素只吃 shadow 自己的 `<style>`**，挂在 `document.body` 的批量按钮需要另注一份 |
+| v1.13.4 | 下载改为通用扫描：任意创作页/详情弹窗，按 `img.alt` 原名批量打包 zip；单张仍直接存 | ①**`img.alt` 才是素材原名**（莉娅-日常装配护手-左臂刀伤流血），资产卡标题只有角色名 ②批量 `a[download]` 会被浏览器"多文件下载"策略拦掉只剩第一张；`chrome.downloads` 下 COS 直链虽报 complete 但文件被系统清掉（`exists:false`）③**批量必须打包成单个 zip**，14 张 35MB 一次落盘 |
 
 ---
 
