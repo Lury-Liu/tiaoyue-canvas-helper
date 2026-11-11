@@ -184,3 +184,20 @@ git add -A && git commit -m "v1.11.0" && git push
 - 更新只从 `raw.githubusercontent.com` 拉取，要求内容长度 ≥5000 且含 `__TYQ` 标记，防止把 404 HTML 当脚本执行。
 - 扩展权限仅 `storage` + `raw.githubusercontent.com`；`content_scripts` 只匹配 `www.tiaoyue.com` 与 `canvas.tiaoyue.com`。
 - `content.js` 运行在页面主世界（`world: "MAIN"`）以读取 React fiber；不向第三方发送数据。
+
+---
+
+## 10. 许可与隐私
+
+**许可**：MIT，见 [LICENSE](./LICENSE)。可自由使用、修改、分发，保留版权声明即可。
+
+**隐私**：
+
+| 项 | 说明 |
+|---|---|
+| 收集数据 | 无。没有统计、埋点、账号体系 |
+| 上传内容 | 无。提示词、素材、项目数据全部留在本机 |
+| 读取范围 | 仅当前页面 DOM（提示词编辑器、素材列表、图片链接） |
+| 外部请求 | 只有一项：检查 `raw.githubusercontent.com` 上的版本号；更新时代码也从这个地址拉 |
+| 下载 | 走浏览器本地下载 / 目录写入（File System Access），不经过任何第三方服务 |
+| 权限 | `storage`（记住面板位置/更新状态）+ 目标站点访问；不申请 `tabs`、`history`、`cookies` 等 |

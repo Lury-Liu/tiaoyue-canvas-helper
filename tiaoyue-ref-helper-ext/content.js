@@ -1,5 +1,5 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.17.0。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.18.2。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
@@ -25,8 +25,7 @@
  *      12.1 URL 与命名   缩略图 -> 原图直链，alt -> 文件名
  *      12.2 范围扫描    当前片段 / 角色详情 / 整页
  *      12.3 单张保存
- *      12.4 ZIP 打包    store 模式，保原名
- *      12.5 批量流程
+ *      12.4 批量保存    选一次目录直接写文件（无需解压）
  *      12.6 悬浮按钮    可拖动、记忆位置
  *      12.7 卡片角标    资产卡单张下载
  *      12.8 生命周期    路由启停、样式注入
@@ -48,7 +47,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); stopAssetDL(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.17.0';
+  const TYQ_VERSION = '1.18.2';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -1955,72 +1954,6 @@
     saveBlob(await res.blob(), item.name);
   }
 
-  /* ---- 12.4 ZIP 打包（store 模式，图片本身已压缩） ---- */
-  const CRC_TABLE = (() => {
-    const t = new Uint32Array(256);
-    for (let i = 0; i < 256; i++) {
-      let c = i;
-      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-      t[i] = c >>> 0;
-    }
-    return t;
-  })();
-
-  function crc32(u8) {
-    let c = 0xffffffff;
-    for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xff] ^ (c >>> 8);
-    return (c ^ 0xffffffff) >>> 0;
-  }
-
-  function zipStore(files) {
-    const enc = new TextEncoder();
-    const parts = [];
-    const central = [];
-    let offset = 0;
-    for (const f of files) {
-      const nameU8 = enc.encode(f.name);
-      const crc = crc32(f.u8);
-      const size = f.u8.length;
-
-      const lh = new DataView(new ArrayBuffer(30));
-      lh.setUint32(0, 0x04034b50, true);
-      lh.setUint16(4, 20, true);
-      lh.setUint16(6, 0x0800, true);   // UTF-8 文件名
-      lh.setUint16(8, 0, true);        // store
-      lh.setUint32(14, crc, true);
-      lh.setUint32(18, size, true);
-      lh.setUint32(22, size, true);
-      lh.setUint16(26, nameU8.length, true);
-      parts.push(new Uint8Array(lh.buffer), nameU8, f.u8);
-
-      const ch = new DataView(new ArrayBuffer(46));
-      ch.setUint32(0, 0x02014b50, true);
-      ch.setUint16(4, 20, true);
-      ch.setUint16(6, 20, true);
-      ch.setUint16(8, 0x0800, true);
-      ch.setUint32(16, crc, true);
-      ch.setUint32(20, size, true);
-      ch.setUint32(24, size, true);
-      ch.setUint16(28, nameU8.length, true);
-      ch.setUint32(42, offset, true);
-      central.push(new Uint8Array(ch.buffer), nameU8);
-
-      offset += 30 + nameU8.length + size;
-    }
-    const cdStart = offset;
-    let cdSize = 0;
-    for (const c of central) { parts.push(c); cdSize += c.length; }
-
-    const eocd = new DataView(new ArrayBuffer(22));
-    eocd.setUint32(0, 0x06054b50, true);
-    eocd.setUint16(8, files.length, true);
-    eocd.setUint16(10, files.length, true);
-    eocd.setUint32(12, cdSize, true);
-    eocd.setUint32(16, cdStart, true);
-    parts.push(new Uint8Array(eocd.buffer));
-    return new Blob(parts, { type: 'application/zip' });
-  }
-
   function saveCard(card) {
     const img = card.querySelector('span.thumb img') || card.querySelector('img');
     if (!img) throw new Error('该卡片没有图片');
@@ -2030,108 +1963,44 @@
     });
   }
 
-  function saveBlob(blob, name) {
-    const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name + '.' + ext;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 15000);
-  }
-
-  /* ---- 12.7 资产卡角标（单张） ---- */
-  function decorateCard(card) {
-    if (card.querySelector('.tyq-dl')) return;
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'tyq-dl';
-    b.textContent = '原图';
-    b.title = '下载原图（高清，文件名=素材名）';
-    b.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (b.disabled) return;
-      b.disabled = true;
-      b.textContent = '下载中';
-      try {
-        await saveCard(card);
-        b.textContent = '已保存';
-      } catch (err) {
-        b.textContent = '失败';
-        toast('原图下载失败：' + (err && err.message ? err.message : err));
-      }
-      setTimeout(() => { b.disabled = false; b.textContent = '原图'; }, 1400);
-    });
-    const thumb = card.querySelector('span.thumb');
-    (thumb || card).appendChild(b);
-  }
-
-  /* ---- 12.8 生命周期：样式 / 扫描定时器 / 路由启停 ---- */
-  function ensureAssetStyle(sr) {
-    // 卡片角标在 shadow 内，需要 shadow 自己的样式
-    if (!sr.querySelector('#' + ASSET_STYLE_ID)) {
-      const s = document.createElement('style');
-      s.id = ASSET_STYLE_ID;
-      s.textContent = ASSET_CSS;
-      (sr.head || sr).appendChild(s);
-    }
-    // 「全部原图」按钮挂在 document.body 上，外部样式穿不进 shadow，需单独一份
-    if (!document.getElementById('tyq-asset-doc-style')) {
-      const d = document.createElement('style');
-      d.id = 'tyq-asset-doc-style';
-      d.textContent = ASSET_CSS;
-      document.head.appendChild(d);
-    }
-  }
-
-  /* ---- 12.5 批量流程 ---- */
-  // 页面上取一个短文本（集名 / 片段名）；只在点下载时调用一次
-  function pickText(re) {
-    const sr = SHADOW();
-    if (!sr) return '';
-    for (const e of sr.querySelectorAll('span,div')) {
-      if (e.children.length) continue;
-      const t = (e.textContent || '').trim();
-      if (re.test(t)) return t.replace(/\s+/g, '');
-    }
-    return '';
-  }
-
-  // zip 基名：「第12集-片段1」「素材」
-  function zipBaseName(scope) {
-    if (scope === 'detail') return '角色素材';
-    const parts = [];
-    const ep = pickText(/^第\d+集$/);
-    const clip = pickText(/^片段\s*\d+/);
-    if (ep) parts.push(ep);
-    if (clip) parts.push(clip);
-    return (parts.length ? parts.join('-') : '素材').replace(/[\\/:*?"<>|]/g, '_');
-  }
-
+  /* ---- 12.4 批量保存到文件夹（File System Access，无需解压） ---- */
   async function downloadList(list, btn, scope) {
     if (assetBatchBusy) return;
+    if (typeof window.showDirectoryPicker !== 'function') {
+      toast('当前浏览器不支持直接存文件夹，请用 Edge 或 Chrome 打开');
+      return;
+    }
+
     assetBatchBusy = true;
     btn.disabled = true;
-    const label = scope === 'clip' ? '下载当前片段 ('
-      : scope === 'detail' ? '下载本弹窗 ('
-        : '下载素材 (';
+    btn.textContent = '选择文件夹…';
+
+    let dir;
+    try {
+      // 必须在点击的同步链路里调用，否则浏览器认为没有用户手势
+      dir = await window.showDirectoryPicker({ id: 'tyq-assets', mode: 'readwrite' });
+    } catch (e) {
+      assetBatchBusy = false;
+      btn.disabled = false;
+      btn.textContent = (scope === 'clip' ? '下载当前片段 (' : scope === 'detail' ? '下载本弹窗 (' : '下载素材 (') + list.length + ')';
+      return;   // 用户取消
+    }
+
+    const label = scope === 'clip' ? '下载当前片段 (' : scope === 'detail' ? '下载本弹窗 (' : '下载素材 (';
     const total = list.length;
-    const files = [];
     const used = new Map();
     const failed = [];
-    let gotBytes = 0;
+    let ok = 0, gotBytes = 0;
+
     for (let i = 0; i < total; i++) {
       const it = list[i];
-      btn.textContent = '打包中 ' + (i + 1) + '/' + total + ' · ' + (gotBytes / 1048576).toFixed(1) + 'MB';
+      btn.textContent = '保存中 ' + (i + 1) + '/' + total + ' · ' + (gotBytes / 1048576).toFixed(1) + 'MB';
       try {
         const res = await fetch(it.url);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const u8 = new Uint8Array(await res.arrayBuffer());
-        gotBytes += u8.length;
-        const ext = extOfType(res.headers.get('content-type'));
+        const blob = await res.blob();
+        gotBytes += blob.size;
+        const ext = extOfType(blob.type);
         let name = it.name + ext;
         if (used.has(name)) {
           const n = used.get(name) + 1;
@@ -2140,24 +2009,24 @@
         } else {
           used.set(name, 1);
         }
-        files.push({ name, u8 });
+        const fh = await dir.getFileHandle(name, { create: true });
+        const w = await fh.createWritable();
+        await w.write(blob);
+        await w.close();
+        ok++;
       } catch (e) {
         failed.push(it.name);
       }
     }
-    if (files.length) {
-      const d = new Date();
-      const p = (n) => String(n).padStart(2, '0');
-      const stamp = '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
-      saveBlob(zipStore(files), zipBaseName(scope) + '-' + stamp);
-    }
+
     assetBatchBusy = false;
     btn.disabled = false;
     btn.textContent = label + total + ')';
+
     let msg;
-    if (!files.length) msg = '没有可下载的素材';
-    else if (!failed.length) msg = '已打包 ' + files.length + ' 张 · ' + (gotBytes / 1048576).toFixed(1) + 'MB';
-    else msg = '已打包 ' + files.length + ' 张，失败 ' + failed.length + '：' + failed.slice(0, 3).join('、') + (failed.length > 3 ? ' 等' : '');
+    if (!ok) msg = '没有保存成功' + (failed.length ? '：' + failed.slice(0, 3).join('、') : '');
+    else if (!failed.length) msg = '已保存 ' + ok + ' 张到「' + dir.name + '」· ' + (gotBytes / 1048576).toFixed(1) + 'MB';
+    else msg = '已保存 ' + ok + ' 张，失败 ' + failed.length + '：' + failed.slice(0, 3).join('、') + (failed.length > 3 ? ' 等' : '');
     toast(msg, 4200);
   }
 
@@ -2238,6 +2107,51 @@
     btn.__tyqCleanup = () => window.removeEventListener('resize', onResize);
   }
 
+  /* ---- 12.7 资产卡角标（单张） ---- */
+  function decorateCard(card) {
+    if (card.querySelector('.tyq-dl')) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tyq-dl';
+    b.textContent = '原图';
+    b.title = '下载原图（高清，文件名=素材名）';
+    b.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (b.disabled) return;
+      b.disabled = true;
+      b.textContent = '下载中';
+      try {
+        await saveCard(card);
+        b.textContent = '已保存';
+      } catch (err) {
+        b.textContent = '失败';
+        toast('原图下载失败：' + (err && err.message ? err.message : err));
+      }
+      setTimeout(() => { b.disabled = false; b.textContent = '原图'; }, 1400);
+    });
+    const thumb = card.querySelector('span.thumb');
+    (thumb || card).appendChild(b);
+  }
+
+  /* ---- 12.8 生命周期：样式 / 扫描定时器 / 路由启停 ---- */
+  function ensureAssetStyle(sr) {
+    // 卡片角标在 shadow 内，需要 shadow 自己的样式
+    if (!sr.querySelector('#' + ASSET_STYLE_ID)) {
+      const s = document.createElement('style');
+      s.id = ASSET_STYLE_ID;
+      s.textContent = ASSET_CSS;
+      (sr.head || sr).appendChild(s);
+    }
+    // 「全部原图」按钮挂在 document.body 上，外部样式穿不进 shadow，需单独一份
+    if (!document.getElementById('tyq-asset-doc-style')) {
+      const d = document.createElement('style');
+      d.id = 'tyq-asset-doc-style';
+      d.textContent = ASSET_CSS;
+      document.head.appendChild(d);
+    }
+  }
+
   function removeDlButton() {
     document.querySelectorAll('.tyq-dlall').forEach((n) => {
       try { if (n.__tyqCleanup) n.__tyqCleanup(); } catch (e) { /* 忽略 */ }
@@ -2266,7 +2180,7 @@
       all = document.createElement('button');
       all.type = 'button';
       all.className = 'tyq-dlall';
-      all.title = '下载当前范围内所有素材（当前片段 / 角色详情 / 整页），按原名打包 zip';
+      all.title = '下载当前范围内的素材原图（当前片段 / 角色详情 / 整页），按原名保存到所选文件夹';
       all.addEventListener('click', () => {
         const cur = scanScope();
         const curList = scanMaterials(cur.root);
