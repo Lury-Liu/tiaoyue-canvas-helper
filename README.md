@@ -38,7 +38,7 @@
 | 查找替换 | `Ctrl+F`：全部命中高亮（超 300 处提示仅高亮前 300）、回车/Shift+回车逐个跳转（首尾循环）、默认忽略大小写、素材名也能搜（超 8 条提示收窄关键词）、通用文件名标注；替换后自动前进到下一处；「全部替换」显示命中数量；替换目标为**可搜索**的素材选择器 |
 | 面板拖动 | 面板与悬浮球均可拖，位置本地记忆，双击标题栏复位 |
 | 切节点自动刷新 | 面板打开时切节点，素材列表 ≤0.4s 自动跟随 |
-| 自动更新 | 每次进入画布检查 GitHub 并热替换（无需刷新）；断网回退内置版 |
+| 自动更新 | `loader.js` 每小时检查并**下载**新代码（扩展上下文，不受页面网络/CORS 影响）；主世界注入并接管旧实例。已打开的页面**无需刷新**即刻生效；断网时用已缓存的新版本。popup 显示**真实运行版本** |
 | 素材下载 | 右下角按钮按范围取原图，**直接存到「下载/第N集/」，原名不改、不打包、不弹目录；同名已存在会跳过**：**当前片段 (N)**（只含本片段实际引用的素材）／**下载本弹窗 (N)**（角色详情，各状态各自原名）／整页兜底；资产库卡片另有「原图」单张按钮；按钮可拖动并记住位置 |
 
 ### 已移除（不要加回来）
@@ -58,7 +58,7 @@
 ├─ tiaoyue-ref-helper.user.js        # 唯一源码（油猴脚本，也可直装 Tampermonkey）
 ├─ tiaoyue-ref-helper-ext/           # MV3 扩展
 │  ├─ config.js                      # 仓库地址（转手必改）
-│  ├─ loader.js                      # 隔离世界：每小时查更新 → 只记录状态（不注入）
+│  ├─ loader.js                      # 隔离世界：查更新 → 下载代码 → 推给主世界注入
 │  ├─ content.js                     # 构建产物，勿手改
 │  ├─ manifest.json / version.json   # 内置版 / 线上版
 │  ├─ popup.html / popup.js          # 弹窗：版本、更新状态、快捷键
@@ -99,7 +99,7 @@
 | 查找高亮 | `drawFindHL()` 在滚动、尺寸或查找内容变化时按需重画（≤300），当前命中始终保留；偏移映射每次刷新只构建一次 |
 | 历史 | 按节点保存最多 20 个快照；写回及历史跳转校验所属节点，手动改稿在覆盖前留档 |
 | 路由 | SPA：`CANVAS_ROUTE='/aigc/canvas/'` + `pushState/popstate/hashchange` 钩子启停；`teardown()` 清 UI |
-| 热更新 | 由 `content.js` 的 `selfUpdate()` 执行（**MAIN world，每次进画布**）：拉 `version.json` → blob 注入新版 + `__TYQ_FORCE_ONCE` 接管，旧实例靠 `alive` / `__TYQ_DISPOSE__` 停监听。`loader.js` 只做 1h 节流检查并记录状态——**隔离世界插入的 `<script>` 不会在主世界执行**，所以它不负责注入 |
+| 热更新 | **下载在隔离世界、注入在主世界**：`loader.js` 1h 节流检查，发现新版就把 `content.js` 拉下来存进 `chrome.storage`（扩展上下文 fetch 不受页面 CORS/网络策略影响），并用 `postMessage` 推给主世界；`content.js` 收到后 blob 注入 + `__TYQ_FORCE_ONCE` 接管，旧实例靠 `alive` / `__TYQ_DISPOSE__` 停监听。主世界启动会发 `want-code` 索取缓存，**断网也能用上已下载的版本**。`selfUpdate()` 保留为兜底（主世界直连 GitHub） |
 
 **高风险依赖**：`_promptEditor_` 类名、React fiber props 结构、wujie 挂载方式。任一处变更都可能让 `api()` 返回 `null`（面板提示「未找到提示词输入框」）。
 
@@ -122,7 +122,7 @@ git add -A && git commit -m "v1.11.0" && git push
 ```
 
 - **别用 `Compress-Archive` 打这个包**：它写出的目录条目是 `icons\icon16.png`（反斜杠），不符合 ZIP 规范，部分解压工具会把它当成一个文件名，解压后没有 `icons` 目录，Chrome 加载时报图标错误。`tools/pack.js` 固定用 `/`，且产物可复现。
-- 其他机器：进入画布即自动检查（`selfUpdate()` 每次进画布都跑，loader 侧最多 1h 一次）；或弹窗点「立即检查更新」。
+- 其他机器：进入任意 tiaoyue 页面即自动检查（loader 最多 1h 一次；主世界启动握手取缓存）；或弹窗点「立即检查更新」，已打开的页面会被就地推送，无需刷新。
 - **推送后别急着测**：raw.githubusercontent 的 CDN 需要几十秒刷新，刚推完立刻拉可能还是旧版本，容易误判成"更新失败"。
 - 不带参数运行 build.js 只按当前 manifest 版本重新生成 content.js。
 
@@ -142,7 +142,8 @@ git add -A && git commit -m "v1.11.0" && git push
 | `jumpTo()` / `jumpToken()` / `setPin()` / `followLoop()` | 定位与高亮框 |
 | `drawFindHL()` / `allPositions()` | 查找多命中高亮、忽略大小写扫描、首尾循环 |
 | `isGenericName()` | 通用上传文件名（image.png 等）识别，仅标注 |
-| `selfUpdate()` | 每次进画布检查线上版本并热替换 |
+| `selfUpdate()` | 主世界直连 GitHub 的兜底热更新 |
+| `applyRemoteCode()` | 收到 loader 下发的代码后 blob 注入并接管（主通道） |
 | `pinClipRects()` / `isClipper()` | 高亮裁剪 |
 | `showGuide()` / `buildUI()` / `placePanel()` | 引导、UI、定位 |
 | `teardown()` / `onRoute()` | 路由启停 |

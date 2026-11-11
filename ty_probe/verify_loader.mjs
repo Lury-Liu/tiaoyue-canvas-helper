@@ -1,6 +1,6 @@
-/* 自动更新检查器回归：直接跑真实的 tiaoyue-ref-helper-ext/loader.js
- * 用沙箱伪造 chrome.storage / fetch / document。
- * 分工：loader 只检查并记录状态；热更新由 content.js 在主世界完成。
+/* 自动更新分发器回归：直接跑真实的 tiaoyue-ref-helper-ext/loader.js
+ * 用沙箱伪造 chrome.storage / chrome.storage.onChanged / fetch / window。
+ * 分工：loader 负责下载与下发；content.js（主世界）负责注入。
  * 用法：node ty_probe/verify_loader.mjs
  */
 import fs from 'node:fs';
@@ -22,9 +22,14 @@ function ok(name, cond, extra = '') {
   else { fail++; lines.push(`  ✗ ${name}${extra ? ' → ' + extra : ''}`); }
 }
 
+const GOOD_CODE = '__TYQ ' + 'x'.repeat(6000);
+
 async function run({ storage = {}, remote = {}, httpFail = false } = {}) {
   const store = { ...storage };
   const fetched = [];
+  const pushed = [];
+  let msgHandler = null;
+  let changeHandler = null;
 
   const chrome = {
     runtime: { getManifest: () => ({ version: BUNDLED }) },
@@ -42,6 +47,7 @@ async function run({ storage = {}, remote = {}, httpFail = false } = {}) {
         },
         set: async (obj) => { Object.assign(store, obj); },
       },
+      onChanged: { addListener: (fn) => { changeHandler = fn; } },
     },
   };
 
@@ -56,68 +62,82 @@ async function run({ storage = {}, remote = {}, httpFail = false } = {}) {
   };
 
   const ctx = vm.createContext({
-    chrome, fetch, console,
-    document: { createElement: () => ({}), head: null, documentElement: { appendChild: () => {} } },
-    Blob: class {}, URL: { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} },
-    Date, JSON, String, parseInt, setTimeout,
+    chrome, fetch, console, Date, JSON, String, parseInt, setTimeout,
+    window: {
+      addEventListener: (type, fn) => { if (type === 'message') msgHandler = fn; },
+      postMessage: (data) => { pushed.push(data); },
+    },
   });
   vm.runInContext(CONFIG, ctx);
   vm.runInContext(LOADER, ctx);
-  await new Promise((r) => setTimeout(r, 80));
-  return { store, fetched };
+  await new Promise((r) => setTimeout(r, 100));
+
+  return {
+    store, fetched, pushed,
+    message: async (data) => { if (msgHandler) msgHandler({ data }); await new Promise((r) => setTimeout(r, 60)); },
+    change: async (changes) => { if (changeHandler) changeHandler(changes, 'local'); await new Promise((r) => setTimeout(r, 60)); },
+  };
 }
 
 const HOUR = 60 * 60 * 1000;
 const now = Date.now();
 
-console.log(`\n== 自动更新检查器回归（内置 v${BUNDLED}）==\n`);
+console.log(`\n== 自动更新分发器回归（内置 v${BUNDLED}）==\n`);
 
-/* A. 远端有新版 → 只记录，不下载代码 */
+/* A. 远端有新版 → 下载代码 + 入库 + 推给页面 */
 {
-  const r = await run({ remote: { meta: { version: '9.9.9', file: 'tiaoyue-ref-helper-ext/content.js' }, code: 'x' } });
+  const r = await run({ remote: { meta: { version: '9.9.9', file: 'tiaoyue-ref-helper-ext/content.js' }, code: GOOD_CODE } });
   ok('A 有新版：记录线上版本', r.store['tyq.upd.online'] === '9.9.9', r.store['tyq.upd.online']);
-  ok('A 有新版：记录待升级版本', r.store['tyq.upd.ver'] === '9.9.9', r.store['tyq.upd.ver']);
-  ok('A 有新版：状态提示自动应用', /发现 v9\.9\.9/.test(r.store['tyq.upd.status'] || ''), r.store['tyq.upd.status']);
-  ok('A 有新版：不拉代码（只请求 version.json）', r.fetched.length === 1, `fetched=${r.fetched.length}`);
-  ok('A 有新版：请求带时间戳穿透缓存', (r.fetched[0] || '').includes('?t='));
+  ok('A 有新版：入库新代码', (r.store['tyq.upd.code'] || '').length > 5000);
+  ok('A 有新版：记录版本', r.store['tyq.upd.ver'] === '9.9.9', r.store['tyq.upd.ver']);
+  ok('A 有新版：状态为已下载', /已下载 v9\.9\.9/.test(r.store['tyq.upd.status'] || ''), r.store['tyq.upd.status']);
+  ok('A 有新版：请求 version.json + content.js', r.fetched.length === 2, `fetched=${r.fetched.length}`);
+  ok('A 有新版：请求带时间戳穿透缓存', r.fetched.every((u) => u.includes('?t=')));
+  ok('A 有新版：向主世界推送新代码', r.pushed.some((p) => p.__tyq === 'apply-code' && p.ver === '9.9.9'));
 }
 
-/* B. 同版本 → 已是最新 */
+/* B. 同版本 → 已是最新，不下载 */
 {
   const r = await run({ remote: { meta: { version: BUNDLED } } });
-  ok('B 同版本：不写待升级版本', r.store['tyq.upd.ver'] === undefined);
+  ok('B 同版本：不写新代码', r.store['tyq.upd.code'] === undefined);
   ok('B 同版本：状态已是最新', /已是最新/.test(r.store['tyq.upd.status'] || ''), r.store['tyq.upd.status']);
+  ok('B 同版本：只请求一次', r.fetched.length === 1, `fetched=${r.fetched.length}`);
+  ok('B 同版本：不推送', r.pushed.length === 0, `pushed=${r.pushed.length}`);
 }
 
-/* C. 远端更旧（当前常见） → 不误报 */
+/* C. 远端更旧 → 不误报 */
 {
   const r = await run({ remote: { meta: { version: '1.10.2' } } });
   ok('C 远端更旧：状态已是最新', /已是最新/.test(r.store['tyq.upd.status'] || ''));
   ok('C 远端更旧：记录线上版本', r.store['tyq.upd.online'] === '1.10.2');
-  ok('C 远端更旧：不写待升级版本', r.store['tyq.upd.ver'] === undefined);
+  ok('C 远端更旧：不写新代码', r.store['tyq.upd.code'] === undefined);
 }
 
-/* D. 1 小时内已检查 → 不打网络 */
+/* D. 1 小时内已检查且无缓存 → 不打网络、不推送 */
 {
   const r = await run({ storage: { 'tyq.upd.at': now - 5 * 60 * 1000 }, remote: { meta: { version: '9.9.9' } } });
   ok('D 节流：无任何请求', r.fetched.length === 0, `fetched=${r.fetched.length}`);
+  ok('D 节流：无推送', r.pushed.length === 0);
 }
 
 /* E. 超 1 小时 → 重新检查 */
 {
-  const r = await run({ storage: { 'tyq.upd.at': now - HOUR - 1000 }, remote: { meta: { version: '9.9.9' } } });
-  ok('E 超时：重新联网', r.fetched.length === 1, `fetched=${r.fetched.length}`);
-  ok('E 超时：记录新版', r.store['tyq.upd.ver'] === '9.9.9');
+  const r = await run({
+    storage: { 'tyq.upd.at': now - HOUR - 1000 },
+    remote: { meta: { version: '9.9.9' }, code: GOOD_CODE },
+  });
+  ok('E 超时：重新联网', r.fetched.length === 2, `fetched=${r.fetched.length}`);
+  ok('E 超时：入库新版', r.store['tyq.upd.ver'] === '9.9.9');
 }
 
-/* F. 节流期内即使有旧缓存也不联网 */
+/* F. 节流期内但有缓存 → 不联网，仍把缓存推给页面 */
 {
   const r = await run({
-    storage: { 'tyq.upd.ver': '9.9.8', 'tyq.upd.at': now - 1000 },
+    storage: { 'tyq.upd.code': GOOD_CODE, 'tyq.upd.ver': '9.9.8', 'tyq.upd.at': now - 1000 },
     remote: { meta: { version: '9.9.9' } },
   });
-  ok('F 节流期内：不联网', r.fetched.length === 0, `fetched=${r.fetched.length}`);
-  ok('F 节流期内：状态不被篡改', r.store['tyq.upd.status'] === undefined);
+  ok('F 有缓存：不联网', r.fetched.length === 0, `fetched=${r.fetched.length}`);
+  ok('F 有缓存：启动即推送', r.pushed.some((p) => p.__tyq === 'apply-code' && p.ver === '9.9.8'));
 }
 
 /* G. 网络 500 */
@@ -132,15 +152,48 @@ console.log(`\n== 自动更新检查器回归（内置 v${BUNDLED}）==\n`);
   ok('H 缺字段：状态记录失败', /检查失败/.test(r.store['tyq.upd.status'] || ''), r.store['tyq.upd.status']);
 }
 
-/* I. 节流时间被写入（避免每次刷新重复请求） */
+/* I. 节流时间被写入 */
 {
   const r = await run({ remote: { meta: { version: BUNDLED } } });
   ok('I 检查后写入时间戳', typeof r.store['tyq.upd.at'] === 'number' && r.store['tyq.upd.at'] > now - 5000);
 }
 
-/* J. 全程无未捕获的 Promise 拒绝（chrome.storage.get 参数非法会在这里暴露） */
+/* J. 代码过短 → 拒绝入库 */
 {
-  ok('J 无未捕获异常', rejections.length === 0, rejections.map((e) => e && e.message).join('; '));
+  const r = await run({ remote: { meta: { version: '9.9.9' }, code: 'too short' } });
+  ok('J 代码异常：不入库', r.store['tyq.upd.code'] === undefined);
+  ok('J 代码异常：状态报失败', /检查失败/.test(r.store['tyq.upd.status'] || ''), r.store['tyq.upd.status']);
+}
+
+/* K. 主世界 want-code 握手 → 回推缓存 */
+{
+  const r = await run({
+    storage: { 'tyq.upd.code': GOOD_CODE, 'tyq.upd.ver': '9.9.8', 'tyq.upd.at': now },
+    remote: {},
+  });
+  const before = r.pushed.length;
+  await r.message({ __tyq: 'want-code' });
+  ok('K 握手：有缓存则回推', r.pushed.length > before && r.pushed.at(-1).ver === '9.9.8');
+}
+
+/* L. 主世界 code-applied → 记录已应用 */
+{
+  const r = await run({ storage: { 'tyq.upd.at': now }, remote: {} });
+  await r.message({ __tyq: 'code-applied', ver: '9.9.8' });
+  ok('L 回执：记录应用版本', r.store['tyq.upd.applied'] === '9.9.8', r.store['tyq.upd.applied']);
+  ok('L 回执：状态为已应用', /已应用 v9\.9\.8/.test(r.store['tyq.upd.status'] || ''), r.store['tyq.upd.status']);
+}
+
+/* M. popup 写缓存 → storage.onChanged 立刻推送 */
+{
+  const r = await run({ storage: { 'tyq.upd.at': now }, remote: {} });
+  await r.change({ 'tyq.upd.code': { newValue: GOOD_CODE }, 'tyq.upd.ver': { newValue: '9.9.9' } });
+  ok('M 存储变更：推送给页面', r.pushed.some((p) => p.__tyq === 'apply-code' && p.ver === '9.9.9'));
+}
+
+/* N. 全程无未捕获的 Promise 拒绝 */
+{
+  ok('N 无未捕获异常', rejections.length === 0, rejections.map((e) => e && e.message).join('; '));
 }
 
 console.log(lines.join('\n'));
