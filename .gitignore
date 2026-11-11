@@ -21,6 +21,7 @@ ty_probe/*
 !ty_probe/verify_real_panel.mjs
 !ty_probe/verify_real_live.mjs
 !ty_probe/verify_loader.mjs
+!ty_probe/verify_update_e2e.mjs
 !ty_probe/verify_takeover.mjs
 !ty_probe/verify_autoupdate_e2e.mjs
 !ty_probe/rtest.mjs
