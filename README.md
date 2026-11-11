@@ -10,6 +10,16 @@
 ## 0. 交接必读
 
 1. **不要手改 `tiaoyue-ref-helper-ext/content.js`**：它由 `tiaoyue-ref-helper.user.js` 经 `tools/build.js` 生成，手改会在下次构建时被覆盖。
+**版本号规范（v1.17.1 起）**
+
+| 位 | 含义 | 例子 |
+|---|---|---|
+| 第三位 `x.y.Z` | 修 bug、清理、优化，**不新增功能** | 1.17.0 → 1.17.1 |
+| 第二位 `x.Y.0` | **新增功能** | 1.17.1 → 1.18.0 |
+| 第一位 `X.0.0` | **重构代码逻辑 / 大改** | 1.x → 2.0.0 |
+
+> 注意：自动更新只升不降。把线上版本改小后，已经升到更高版本的机器不会回退，需要手动重装或重载。
+
 2. **发布必须走构建**：`node tools/build.js <x.y.z>` → commit → push。版本号不涨，自动更新不会生效。
 3. **仓库改名/转移要改两处**：`tiaoyue-ref-helper-ext/config.js` 的 `TYQ_REPO`/`TYQ_BRANCH`，以及 `tiaoyue-ref-helper.user.js` 的 `UPD_REPO`/`UPD_BRANCH`。漏改任何一处都会让一部分客户端更新 404。
 4. **`ty_probe/` 白名单入库**：只有模拟页（`fake*.html`、`replica.html`）和验证脚本（`verify*.mjs`、`rtest*.mjs`、`lib.mjs` 等）进仓库；真实提示词、抓取的站点源码、真机截图被 `.gitignore` 排除，**不要取消**（远程是公开仓库）。

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.21.1
+// @version      1.17.1
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -55,7 +55,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); stopAssetDL(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.21.1';
+  const TYQ_VERSION = '1.17.1';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -868,7 +868,7 @@
   // 节点 id：优先 React props，其次画布容器的 data-node-id，最后才退回素材签名。
   // 用素材签名当键时，两个素材集合完全相同的节点会串历史（Alt+Z 跳错节点）。
   function domNodeId(el) {
-    const hit = el && el.closest && el.closest('[data-node-id]');
+    const hit = el && el.closest ? el.closest('[data-node-id]') : null;
     return hit ? (hit.getAttribute('data-node-id') || '') : '';
   }
 
@@ -1948,22 +1948,15 @@
     return Array.from(map.values());
   }
 
-  /* ---- 12.3 单张保存 ---- */
-  /* fetch 成 blob 再存，文件名用原名。
-   * 批量不走这里——连续 a[download] 会被浏览器"多文件下载"策略拦掉只剩第一张。 */
-  async function saveItem(item) {
-    const res = await fetch(item.url);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    saveBlob(await res.blob(), item.name);
-  }
-
-  function saveCard(card) {
+  /* ---- 12.3 单张保存（资产卡角标）：与批量同一条链路，同样按集归档、同名跳过 ---- */
+  async function saveCard(card) {
     const img = card.querySelector('span.thumb img') || card.querySelector('img');
     if (!img) throw new Error('该卡片没有图片');
-    return saveItem({
-      url: toOrigUrl(img.currentSrc || img.src),
-      name: cleanName(card.querySelector('.cardTitle')?.textContent) || '素材',
-    });
+    const src = img.currentSrc || img.src;
+    const name = cleanName(card.querySelector('.cardTitle')?.textContent) || '素材';
+    const r = await submitDownload(toOrigUrl(src), folderName() + '/' + name + extOfUrl(src));
+    if (!r || !r.ok) throw new Error((r && r.err) || '下载失败');
+    return r;
   }
 
   /* ---- 12.4 批量下载：交给扩展写进「下载/<子目录>/」，不弹目录选择 ---- */
@@ -2004,9 +1997,7 @@
         resolve(d);
       };
       window.addEventListener('message', onMsg);
-      try {
-        window.postMessage({ __tyq: 'download', rid, url, filename }, '*');
-      } catch (err) { /* 走超时分支 */ }
+      window.postMessage({ __tyq: 'download', rid, url, filename }, '*');
       setTimeout(() => {
         if (done) return;
         done = true;
@@ -2016,12 +2007,18 @@
     });
   }
 
+  function scopeLabel(scope) {
+    if (scope === 'clip') return '下载当前片段 (';
+    if (scope === 'detail') return '下载本弹窗 (';
+    return '下载素材 (';
+  }
+
   async function downloadList(list, btn, scope) {
     if (assetBatchBusy) return;
     assetBatchBusy = true;
     btn.disabled = true;
 
-    const label = scope === 'clip' ? '下载当前片段 (' : scope === 'detail' ? '下载本弹窗 (' : '下载素材 (';
+    const label = scopeLabel(scope);
     const folder = folderName(scope);
     const total = list.length;
     const used = new Map();
@@ -2201,9 +2198,7 @@
 
     const sc = scanScope();
     const list = scanMaterials(sc.root);
-    const label = sc.scope === 'clip' ? '下载当前片段 ('
-      : sc.scope === 'detail' ? '下载本弹窗 ('
-        : '下载素材 (';
+    const label = scopeLabel(sc.scope);
     let all = document.querySelector('.tyq-dlall');
     if (!list.length) {
       if (all && !assetBatchBusy) removeDlButton();
