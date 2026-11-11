@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.18.2
+// @version      1.20.3
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -33,7 +33,7 @@
  *      12.1 URL 与命名   缩略图 -> 原图直链，alt -> 文件名
  *      12.2 范围扫描    当前片段 / 角色详情 / 整页
  *      12.3 单张保存
- *      12.4 批量保存    选一次目录直接写文件（无需解压）
+ *      12.4 批量下载    扩展直接写「下载/<子目录>/」，无弹窗、不打包
  *      12.6 悬浮按钮    可拖动、记忆位置
  *      12.7 卡片角标    资产卡单张下载
  *      12.8 生命周期    路由启停、样式注入
@@ -55,7 +55,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); stopAssetDL(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.18.2';
+  const TYQ_VERSION = '1.20.3';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -1948,11 +1948,6 @@
     return Array.from(map.values());
   }
 
-  function extOfType(t) {
-    const s = String(t || '').split(';')[0].split('/')[1] || 'png';
-    return '.' + s.replace('jpeg', 'jpg').replace('svg+xml', 'svg');
-  }
-
   /* ---- 12.3 单张保存 ---- */
   /* fetch 成 blob 再存，文件名用原名。
    * 批量不走这里——连续 a[download] 会被浏览器"多文件下载"策略拦掉只剩第一张。 */
@@ -1971,71 +1966,99 @@
     });
   }
 
-  /* ---- 12.4 批量保存到文件夹（File System Access，无需解压） ---- */
+  /* ---- 12.4 批量下载：交给扩展写进「下载/<子目录>/」，不弹目录选择 ---- */
+  // 页面上取一个短文本（集名 / 片段名）
+  function pickText(re) {
+    const sr = SHADOW();
+    if (!sr) return '';
+    for (const e of sr.querySelectorAll('span,div')) {
+      if (e.children.length) continue;
+      const t = (e.textContent || '').trim();
+      if (re.test(t)) return t.replace(/\s+/g, '');
+    }
+    return '';
+  }
+
+  // 目标子目录：「素材-第12集-片段1-20261111-1435」
+  function folderName(scope) {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    const stamp = '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+    if (scope === 'detail') return '素材-' + stamp;
+    const parts = [];
+    const ep = pickText(/^第\d+集$/);
+    const clip = pickText(/^片段\s*\d+/);
+    if (ep) parts.push(ep);
+    if (clip) parts.push(clip);
+    return (parts.length ? '素材-' + parts.join('-') : '素材') + '-' + stamp;
+  }
+
+  function extOfUrl(u) {
+    const m = /\.(png|jpe?g|webp|gif)(?:\?|$)/i.exec(String(u || ''));
+    return m ? '.' + m[1].toLowerCase().replace('jpeg', 'jpg') : '.png';
+  }
+
+  /* 交给扩展的下载管理器（隔离世界代收，见 loader.js）。
+   * 用 postMessage + 请求 id：CustomEvent.detail 跨世界读不到。 */
+  function submitDownload(url, filename) {
+    const rid = 'r' + Date.now() + Math.floor(Math.random() * 1000);
+    return new Promise((resolve) => {
+      let done = false;
+      const onMsg = (e) => {
+        const d = e && e.data;
+        if (done || !d || d.__tyq !== 'download-ack' || d.rid !== rid) return;
+        done = true;
+        window.removeEventListener('message', onMsg);
+        resolve(d);
+      };
+      window.addEventListener('message', onMsg);
+      try {
+        window.postMessage({ __tyq: 'download', rid, url, filename }, '*');
+      } catch (err) { /* 走超时分支 */ }
+      setTimeout(() => {
+        if (done) return;
+        done = true;
+        window.removeEventListener('message', onMsg);
+        resolve({ ok: false, err: 'no-ack' });
+      }, 4000);
+    });
+  }
+
   async function downloadList(list, btn, scope) {
     if (assetBatchBusy) return;
-    if (typeof window.showDirectoryPicker !== 'function') {
-      toast('当前浏览器不支持直接存文件夹，请用 Edge 或 Chrome 打开');
-      return;
-    }
-
     assetBatchBusy = true;
     btn.disabled = true;
-    btn.textContent = '选择文件夹…';
-
-    let dir;
-    try {
-      // 必须在点击的同步链路里调用，否则浏览器认为没有用户手势
-      dir = await window.showDirectoryPicker({ id: 'tyq-assets', mode: 'readwrite' });
-    } catch (e) {
-      assetBatchBusy = false;
-      btn.disabled = false;
-      btn.textContent = (scope === 'clip' ? '下载当前片段 (' : scope === 'detail' ? '下载本弹窗 (' : '下载素材 (') + list.length + ')';
-      return;   // 用户取消
-    }
 
     const label = scope === 'clip' ? '下载当前片段 (' : scope === 'detail' ? '下载本弹窗 (' : '下载素材 (';
+    const folder = folderName(scope);
     const total = list.length;
     const used = new Map();
     const failed = [];
-    let ok = 0, gotBytes = 0;
+    let ok = 0;
 
     for (let i = 0; i < total; i++) {
       const it = list[i];
-      btn.textContent = '保存中 ' + (i + 1) + '/' + total + ' · ' + (gotBytes / 1048576).toFixed(1) + 'MB';
-      try {
-        const res = await fetch(it.url);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const blob = await res.blob();
-        gotBytes += blob.size;
-        const ext = extOfType(blob.type);
-        let name = it.name + ext;
-        if (used.has(name)) {
-          const n = used.get(name) + 1;
-          used.set(name, n);
-          name = it.name + '-' + n + ext;
-        } else {
-          used.set(name, 1);
-        }
-        const fh = await dir.getFileHandle(name, { create: true });
-        const w = await fh.createWritable();
-        await w.write(blob);
-        await w.close();
-        ok++;
-      } catch (e) {
-        failed.push(it.name);
+      btn.textContent = '下载中 ' + (i + 1) + '/' + total;
+      let name = it.name + extOfUrl(it.url);
+      if (used.has(name)) {
+        const n = used.get(name) + 1;
+        used.set(name, n);
+        name = it.name + '-' + n + extOfUrl(it.url);
+      } else {
+        used.set(name, 1);
       }
+      const r = await submitDownload(it.url, folder + '/' + name);
+      if (r.ok) ok++;
+      else failed.push(it.name);
     }
 
     assetBatchBusy = false;
     btn.disabled = false;
     btn.textContent = label + total + ')';
 
-    let msg;
-    if (!ok) msg = '没有保存成功' + (failed.length ? '：' + failed.slice(0, 3).join('、') : '');
-    else if (!failed.length) msg = '已保存 ' + ok + ' 张到「' + dir.name + '」· ' + (gotBytes / 1048576).toFixed(1) + 'MB';
-    else msg = '已保存 ' + ok + ' 张，失败 ' + failed.length + '：' + failed.slice(0, 3).join('、') + (failed.length > 3 ? ' 等' : '');
-    toast(msg, 4200);
+    if (ok && !failed.length) toast('已保存 ' + ok + ' 张到「下载/' + folder + '」', 4600);
+    else if (ok) toast('已保存 ' + ok + ' 张，失败 ' + failed.length + '：' + failed.slice(0, 3).join('、'), 4600);
+    else toast('下载未开始：请到 edge://extensions 重新加载扩展后重试', 4800);
   }
 
   /* ---- 12.6 悬浮按钮（可拖动 + 记忆位置） ---- */
@@ -2188,7 +2211,7 @@
       all = document.createElement('button');
       all.type = 'button';
       all.className = 'tyq-dlall';
-      all.title = '下载当前范围内的素材原图（当前片段 / 角色详情 / 整页），按原名保存到所选文件夹';
+      all.title = '下载当前范围内的素材原图（当前片段 / 角色详情 / 整页），按原名存到「下载」下的新文件夹';
       all.addEventListener('click', () => {
         const cur = scanScope();
         const curList = scanMaterials(cur.root);

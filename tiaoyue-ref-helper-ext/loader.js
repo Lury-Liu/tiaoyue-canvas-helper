@@ -50,6 +50,29 @@
     return r.text();
   }
 
+  /* ==================== 下载代理 ====================
+   * content.js（主世界）→ 本文件（隔离世界）→ background.js（service worker）
+   * → chrome.downloads。注意：chrome.downloads 在 content script 里不可用，
+   * 必须由 service worker 代下。
+   */
+  window.addEventListener('message', (e) => {
+    const d = e && e.data;
+    if (!d || typeof d !== 'object' || d.__tyq !== 'download' || typeof d.url !== 'string') return;
+    const rid = d.rid || '';
+    const reply = (payload) => {
+      try { window.postMessage(Object.assign({ __tyq: 'download-ack', rid }, payload), '*'); } catch (err) { /* 忽略 */ }
+    };
+    try {
+      chrome.runtime.sendMessage({ type: 'tyq:download', url: d.url, filename: d.filename }, (res) => {
+        const err = chrome.runtime.lastError;
+        if (err) { reply({ ok: false, err: err.message }); return; }
+        reply(res || { ok: false, err: 'no-response' });
+      });
+    } catch (err) {
+      reply({ ok: false, err: String(err && err.message ? err.message : err) });
+    }
+  });
+
   /* ==================== 主流程 ==================== */
   async function main() {
     const st = await store.get([K.at]);
