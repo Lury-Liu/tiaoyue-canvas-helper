@@ -107,7 +107,7 @@
 
 ## 4. 安装与发布
 
-**终端用户（扩展）**：`edge://extensions` → 开「开发人员模式」→「加载解压缩的扩展」→ 选 `tiaoyue-ref-helper-ext`；之后自动更新。
+**终端用户（扩展）**：打开 `chrome://extensions`（Edge 为 `edge://extensions`）→ 开「开发者模式」→「加载已解压的扩展程序」→ 选 `tiaoyue-ref-helper-ext` 目录（必须是含 `manifest.json` 的那一层）；之后自动更新。
 
 **直接拿安装包**：到 [Releases](https://github.com/Lury-Liu/tiaoyue-canvas-helper/releases) 下载 `tiaoyue-ref-helper-ext.zip`，解压后按上面的方式「加载解压缩的扩展」。
 > 注意：从 zip 装的扩展**不会自动更新**（没有 `update_url`），想跟随更新请用仓库目录加载。
@@ -117,9 +117,11 @@
 
 ```bash
 node tools/build.js 1.11.0        # 提升 manifest / version.json / @version / TYQ_VERSION，再生成 content.js
+node tools/pack.js                # 打分发包 tiaoyue-ref-helper-ext.zip（标准 zip，路径分隔符为 /）
 git add -A && git commit -m "v1.11.0" && git push
 ```
 
+- **别用 `Compress-Archive` 打这个包**：它写出的目录条目是 `icons\icon16.png`（反斜杠），不符合 ZIP 规范，部分解压工具会把它当成一个文件名，解压后没有 `icons` 目录，Chrome 加载时报图标错误。`tools/pack.js` 固定用 `/`，且产物可复现。
 - 其他机器：进入画布即自动检查（`selfUpdate()` 每次进画布都跑，loader 侧最多 1h 一次）；或弹窗点「立即检查更新」。
 - **推送后别急着测**：raw.githubusercontent 的 CDN 需要几十秒刷新，刚推完立刻拉可能还是旧版本，容易误判成"更新失败"。
 - 不带参数运行 build.js 只按当前 manifest 版本重新生成 content.js。
