@@ -1,5 +1,5 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.11.5。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.12.2。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
@@ -22,7 +22,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.11.5';
+  const TYQ_VERSION = '1.12.2';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -1781,9 +1781,173 @@
     }, 1000);
   }
 
+  /* ================================================================== *
+   * 9. 创作页资产库：下载原图（/creative/）
+   * ------------------------------------------------------------------ *
+   * 资产卡缩略图 URL 形如 ...png?imageMogr2/format/webp/thumbnail/600x，
+   * 去掉 imageMogr2 段就是原图直链；COS 允许跨域，可直接 fetch 成 blob。
+   * 文件名取卡片标题（strong.cardTitle），正好是素材名。
+   */
+  const ASSET_ROUTE = '/creative/';
+  const ASSET_STYLE_ID = 'tyq-asset-style';
+  const ASSET_CSS = `
+  .tyq-dl{position:absolute;right:6px;bottom:6px;z-index:6;padding:3px 9px;border:1px solid rgba(255,255,255,.16);border-radius:7px;
+    background:rgba(17,17,24,.68);color:#fff;font:500 12px/18px system-ui,-apple-system,"Microsoft YaHei",sans-serif;
+    cursor:pointer;opacity:0;transition:opacity .15s,background .15s;backdrop-filter:blur(4px)}
+  li.card .thumb{position:relative}
+  li.card:hover .tyq-dl{opacity:1}
+  .tyq-dl:hover{background:#6c5ce7}
+  .tyq-dl:disabled{opacity:.85;cursor:default;background:#3a3a46}
+  .tyq-dlall{position:fixed;right:18px;bottom:152px;z-index:2147482999;padding:8px 14px;border:0;border-radius:10px;
+    background:#6c5ce7;color:#fff;font:500 12px/16px system-ui,-apple-system,"Microsoft YaHei",sans-serif;
+    cursor:pointer;box-shadow:0 6px 18px rgba(108,92,231,.35)}
+  .tyq-dlall:disabled{background:#3a3a46;box-shadow:none;cursor:default}
+  .tyq-dlall:hover:not(:disabled){filter:brightness(1.06)}
+  `;
+  let assetTimer = 0;
+  let assetBatchBusy = false;
+
+  // 缩略图 → 原图：整段 imageMogr2 去掉；带签名 URL 保留签名参数
+  function toOrigUrl(u) {
+    if (!u) return '';
+    const q = u.indexOf('?');
+    if (q < 0) return u;
+    if (/^imageMogr2\//.test(u.slice(q + 1))) return u.slice(0, q);
+    return u.replace(/[?&]imageMogr2\/[^&]*/g, '').replace(/[?&]+$/, '');
+  }
+
+  function assetName(card) {
+    const t = (card.querySelector('.cardTitle')?.textContent || '').trim();
+    const raw = t || (card.innerText || '').trim().split(/\s+/)[0] || '素材';
+    return raw.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80);
+  }
+
+  function saveBlob(blob, name) {
+    const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name + '.' + ext;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 15000);
+  }
+
+  async function saveAsset(card) {
+    const img = card.querySelector('span.thumb img') || card.querySelector('img');
+    if (!img) throw new Error('该卡片没有图片');
+    const res = await fetch(toOrigUrl(img.currentSrc || img.src));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    saveBlob(await res.blob(), assetName(card));
+  }
+
+  function decorateCard(card) {
+    if (card.querySelector('.tyq-dl')) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tyq-dl';
+    b.textContent = '原图';
+    b.title = '下载原图（高清，文件名=素材名）';
+    b.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (b.disabled) return;
+      b.disabled = true;
+      b.textContent = '下载中';
+      try {
+        await saveAsset(card);
+        b.textContent = '已保存';
+      } catch (err) {
+        b.textContent = '失败';
+        toast('原图下载失败：' + (err && err.message ? err.message : err));
+      }
+      setTimeout(() => { b.disabled = false; b.textContent = '原图'; }, 1400);
+    });
+    const thumb = card.querySelector('span.thumb');
+    (thumb || card).appendChild(b);
+  }
+
+  function ensureAssetStyle(sr) {
+    // 卡片角标在 shadow 内，需要 shadow 自己的样式
+    if (!sr.querySelector('#' + ASSET_STYLE_ID)) {
+      const s = document.createElement('style');
+      s.id = ASSET_STYLE_ID;
+      s.textContent = ASSET_CSS;
+      (sr.head || sr).appendChild(s);
+    }
+    // 「全部原图」按钮挂在 document.body 上，外部样式穿不进 shadow，需单独一份
+    if (!document.getElementById('tyq-asset-doc-style')) {
+      const d = document.createElement('style');
+      d.id = 'tyq-asset-doc-style';
+      d.textContent = ASSET_CSS;
+      document.head.appendChild(d);
+    }
+  }
+
+  async function downloadAll(cards, btn) {
+    if (assetBatchBusy) return;
+    assetBatchBusy = true;
+    btn.disabled = true;
+    let ok = 0, fail = 0;
+    for (let i = 0; i < cards.length; i++) {
+      try { await saveAsset(cards[i]); ok++; } catch (e) { fail++; }
+      btn.textContent = '下载中 ' + (i + 1) + '/' + cards.length;
+      await new Promise((r) => setTimeout(r, 260));
+    }
+    btn.disabled = false;
+    btn.textContent = '全部原图 (' + cards.length + ')';
+    assetBatchBusy = false;
+    toast('原图下载完成：成功 ' + ok + (fail ? '，失败 ' + fail : ''), 3200);
+  }
+
+  function assetTick() {
+    if (!alive) return;
+    const sr = SHADOW();
+    if (!sr) return;
+    ensureAssetStyle(sr);
+    const cards = Array.from(sr.querySelectorAll('li.card'));
+    if (!cards.length) {
+      document.querySelector('.tyq-dlall')?.remove();
+      return;
+    }
+    cards.forEach(decorateCard);
+
+    // 批量按钮：跟随资产库列表存在
+    let all = document.querySelector('.tyq-dlall');
+    if (!all) {
+      all = document.createElement('button');
+      all.type = 'button';
+      all.className = 'tyq-dlall';
+      all.addEventListener('click', () => {
+        const list = Array.from(SHADOW()?.querySelectorAll('li.card') || []);
+        if (list.length) downloadAll(list, all);
+      });
+      document.body.appendChild(all);
+    }
+    if (!assetBatchBusy) all.textContent = '全部原图 (' + cards.length + ')';
+  }
+
+  function startAssetDL() {
+    if (assetTimer) return;
+    assetTick();
+    assetTimer = setInterval(assetTick, 1200);
+  }
+
+  function stopAssetDL() {
+    clearInterval(assetTimer);
+    assetTimer = 0;
+    document.querySelectorAll('.tyq-dlall').forEach((n) => n.remove());
+    document.getElementById('tyq-asset-doc-style')?.remove();
+    SHADOW()?.querySelectorAll('.tyq-dl').forEach((n) => n.remove());
+    SHADOW()?.querySelector('#' + ASSET_STYLE_ID)?.remove();
+  }
+
   function onRoute() {
     if (location.pathname.includes(CANVAS_ROUTE)) { onCanvasRoute(); selfUpdate(); }
     else teardown();
+    if (location.pathname.includes(ASSET_ROUTE)) startAssetDL();
+    else stopAssetDL();
   }
 
   const _push = history.pushState, _replace = history.replaceState;
