@@ -1,10 +1,36 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.15.0。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.16.0。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
 (function () {
   'use strict';
+
+/* ==================================================================== *
+ * 模块地图（按执行顺序，编号即代码里的区块号）
+ * -------------------------------------------------------------------- *
+ *  0  环境与常量      版本号 / 仓库 / 路由常量
+ *  1  基础 DOM         shadow 穿透、编辑器定位、选区读取
+ *  2  文本模型         DOM <-> 纯文本；引用芯片序列化为 @图片N
+ *  3  素材索引         名字 -> token；引用扫描
+ *  4  写回与历史       写回 React（onChange）、快照、撤销/重做
+ *  5  UI 基座          样式注入、元素工厂、toast、悬浮球/面板骨架
+ *  6  面板渲染         素材清单、预览勾选、定位高亮、页签
+ *  7  历史面板         快照列表、回滚
+ *  8  查找替换         Ctrl+F、命中高亮、替换/全部替换
+ *  9  首次引导         上传才保留原名的提示
+ * 10  事件             快捷键、focusin、内容变化观察
+ * 11  启动与路由       SPA 路由启停、画布/创作页各自装配
+ * 12  素材下载（创作页）
+ *      12.1 URL 与命名   缩略图 -> 原图直链，alt -> 文件名
+ *      12.2 范围扫描    当前片段 / 角色详情 / 整页
+ *      12.3 单张保存
+ *      12.4 ZIP 打包    store 模式，保原名
+ *      12.5 批量流程
+ *      12.6 悬浮按钮    可拖动、记忆位置
+ *      12.7 卡片角标    资产卡单张下载
+ *      12.8 生命周期    路由启停、样式注入
+ * ==================================================================== */
   // 加载守卫：正常只注入一次；loader 热更新时会先置 __TYQ_FORCE_ONCE，
   // 这时允许再次执行，并先清掉旧实例的 UI
   if (window.__TYQ_LOADED__) {
@@ -19,10 +45,10 @@
 
   // 热更新后旧实例的 document 监听仍然存在：统一用 alive 关掉，避免双份响应 / 重复 toast
   let alive = true;
-  window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
+  window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); stopAssetDL(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.15.0';
+  const TYQ_VERSION = '1.16.0';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -40,8 +66,12 @@
   /* 每次进入画布检查一次线上版本：有新版就拉取并注入接管（blob 脚本，
    * __TYQ_FORCE_ONCE 机制清掉本实例）。失败静默——当前版本继续运行。 */
   let updBusy = false;
+  let updCheckedAt = 0;
+  const UPD_INTERVAL = 30 * 60 * 1000;
   async function selfUpdate() {
     if (updBusy || !alive) return;
+    if (Date.now() - updCheckedAt < UPD_INTERVAL) return;
+    updCheckedAt = Date.now();
     updBusy = true;
     try {
       const base = `https://raw.githubusercontent.com/${UPD_REPO}/${UPD_BRANCH}`;
@@ -63,7 +93,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 0. 基础：无界微前端 DOM 访问
+   * 1. 基础 DOM：无界微前端穿透 + 编辑器/选区
    * ------------------------------------------------------------------ */
   const HOST = () => document.querySelector('wujie-app');
   const SHADOW = () => (HOST() && HOST().shadowRoot) || null;
@@ -132,7 +162,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 1. 文本模型：DOM <-> 纯文本（引用芯片序列化为 @图片N）
+   * 2. 文本模型：DOM <-> 纯文本（引用芯片序列化为 @图片N）
    * ------------------------------------------------------------------ */
   function serialize(ed, trimTrailingBreak = true) {
     let t = '';
@@ -207,7 +237,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 2. 素材索引：名字 -> @图片N
+   * 3. 素材索引：名字 -> @图片N
    * ------------------------------------------------------------------ */
   const EXT_RE = /\.(png|jpe?g|webp|bmp|gif|mp4|mov|webm|mp3|wav|m4a|pcm|ogg)$/i;
   const stripExt = (s) => (s || '').replace(EXT_RE, '');
@@ -303,7 +333,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 2.5 写回与历史（每次写回前存快照，可回退到任意一步）
+   * 4. 写回与历史（每次写回前存快照，可回退到任意一步）
    * ------------------------------------------------------------------ */
   const MAX_HISTORY = 20;
 
@@ -431,7 +461,7 @@
   const redo = () => stepHistory(1);
 
   /* ------------------------------------------------------------------ *
-   * 3. UI
+   * 5. UI 基座（样式 / 元素工厂 / toast / 悬浮球）
    * ------------------------------------------------------------------ */
   const CSS = `
   .tyq-launch{position:fixed;right:18px;bottom:96px;z-index:2147483000;width:44px;height:44px;border-radius:22px;
@@ -713,7 +743,7 @@
     p.style.bottom = 'auto';
   }
 
-  /* ---------------- 首次使用引导 ---------------- */
+  /* ---------------- 9. 首次使用引导 ---------------- */
   const GUIDE_KEY = 'tyq.guide.v1';
 
   function showGuide() {
@@ -794,8 +824,8 @@
     else open();
   }
 
+  // 轻提示：画布和创作页共用，不依赖 ui（创作页没有面板，但同样需要反馈）
   function toast(msg, ms = 2000) {
-    if (!ui) return;
     const t = el('div', '', msg);
     t.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:2147483002;background:#111827;color:#fff;' +
       'padding:8px 14px;border-radius:8px;font:12.5px system-ui;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:.96';
@@ -814,7 +844,7 @@
     ui.badge.style.display = n > 0 ? 'block' : 'none';
   }
 
-  /* ---------------- 面板渲染 ---------------- */
+  /* ---------------- 6. 面板渲染 ---------------- */
   let unchecked = new Set();   // 被取消勾选的素材 token
   let uncheckedNodeKey = '';   // 勾选状态所属节点，切节点时清空
   let previewOn = false;
@@ -1228,7 +1258,7 @@
 
   function jumpTo(m) { jumpNeedle(m.label, m.label); }
   function jumpToken(token) { jumpNeedle('@' + token, token); }
-  /* ---------------- 历史 ---------------- */
+  /* ---------------- 7. 历史面板 ---------------- */
   // 手动改动（不经插件写回）只在切到历史页时收录，渲染本身不改档
   // 应用写回后会补尾部换行 / 零宽字符，比较前先归一：
   // 否则「格式化差异」会被当成「用户手动改过」，导致撤销变成存快照后原地跳。
@@ -1248,15 +1278,6 @@
 
   // 用户手改：内容稳定变成「不是我们刚写的、也不在历史里」的文本时留档。
   // 写回后应用有一拍过渡态（长度会短暂不同），400ms 内的变化一律视为回声。
-  function noteManualEdit(a) {
-    if (!a) return;
-    if (Date.now() - lastWrite.at < 400) return;
-    const cur = serialize(a.el);
-    if (sameText(cur, lastWrite.text)) return;
-    if (HIST.list.some((h) => sameText(h.text, cur))) return;
-    pushHistory(cur, '手动改过');
-  }
-
   function captureManualEdit() {
     const a = api();
     if (!a) return;
@@ -1377,7 +1398,7 @@
     schedule();
   }
 
-  /* ---------------- 查找替换 ---------------- */
+  /* ---------------- 8. 查找替换 ---------------- */
   let findState = { find: '', rep: '', last: -1, useRef: '', ic: true };
 
   function renderFind(body, a, index) {
@@ -1662,7 +1683,7 @@
   }
 
   /* ------------------------------------------------------------------ *
-   * 4. 事件：快捷键 + 选区记忆
+   * 10. 事件：快捷键 + 选区记忆 + 内容变化
    * ------------------------------------------------------------------ */
   function editorFromEvent(e) {
     const path = (e.composedPath && e.composedPath()) || [];
@@ -1744,7 +1765,7 @@
   window.addEventListener('resize', () => { if (alive) placePanel(); });
 
   /* ------------------------------------------------------------------ *
-   * 5. 启动
+   * 11. 启动与路由
    * ------------------------------------------------------------------ */
   /* ---------------- 路由感知启动 ----------------
    * 从项目列表等页面 SPA 跳转到画布时不会刷新页面，content script 不会重新注入，
@@ -1782,12 +1803,13 @@
   }
 
   /* ================================================================== *
-   * 9. 创作页资产库：下载原图（/creative/）
+   * 12. 素材下载（创作页 /creative/）
    * ------------------------------------------------------------------ *
    * 资产卡缩略图 URL 形如 ...png?imageMogr2/format/webp/thumbnail/600x，
    * 去掉 imageMogr2 段就是原图直链；COS 允许跨域，可直接 fetch 成 blob。
    * 文件名取卡片标题（strong.cardTitle），正好是素材名。
    */
+  /* ---- 12.1 URL 与命名 ---- */
   const ASSET_ROUTE = '/creative/';
   const ASSET_STYLE_ID = 'tyq-asset-style';
   const ASSET_CSS = `
@@ -1843,6 +1865,7 @@
     return '';
   }
 
+  /* ---- 12.2 范围扫描：当前片段 / 角色详情 / 整页 ---- */
   // 「当前片段」tab：不绑定具体 class，按文本找，兼容不同项目的 tab 实现
   function findClipTab(sr) {
     const cands = Array.from(sr.querySelectorAll('button,[role="tab"],[class*="tab"],[class*="Tab"]'));
@@ -1884,8 +1907,11 @@
   function scanScope() {
     const sr = SHADOW();
     if (!sr) return { root: document, scope: 'page' };
-    const layer = sr.querySelector('.detailLayer');
+    // 角色详情：优先专用容器；退而求其次用「含多张图的 dialog」
+    const layer = sr.querySelector('.detailLayer, [class*="detailLayer"]');
     if (layer) return { root: layer, scope: 'detail' };
+    const dlg = sr.querySelector('[role="dialog"]');
+    if (dlg && dlg.querySelectorAll('img').length > 3) return { root: dlg, scope: 'detail' };
     const clip = activeClipPanel(sr);
     if (clip && clip.querySelectorAll('img').length) return { root: clip, scope: 'clip' };
     return { root: sr, scope: 'page' };
@@ -1907,11 +1933,12 @@
   }
 
   function extOfType(t) {
-    const s = String(t || '').split('/')[1] || 'png';
+    const s = String(t || '').split(';')[0].split('/')[1] || 'png';
     return '.' + s.replace('jpeg', 'jpg').replace('svg+xml', 'svg');
   }
 
-  /* 单张：fetch 成 blob 再存，文件名用原名。
+  /* ---- 12.3 单张保存 ---- */
+  /* fetch 成 blob 再存，文件名用原名。
    * 批量不走这里——连续 a[download] 会被浏览器"多文件下载"策略拦掉只剩第一张。 */
   async function saveItem(item) {
     const res = await fetch(item.url);
@@ -1919,7 +1946,7 @@
     saveBlob(await res.blob(), item.name);
   }
 
-  /* ---------------- 打包 zip（store 模式，图片本身已压缩） ---------------- */
+  /* ---- 12.4 ZIP 打包（store 模式，图片本身已压缩） ---- */
   const CRC_TABLE = (() => {
     const t = new Uint32Array(256);
     for (let i = 0; i < 256; i++) {
@@ -2006,6 +2033,7 @@
     setTimeout(() => URL.revokeObjectURL(url), 15000);
   }
 
+  /* ---- 12.7 资产卡角标（单张） ---- */
   function decorateCard(card) {
     if (card.querySelector('.tyq-dl')) return;
     const b = document.createElement('button');
@@ -2032,6 +2060,7 @@
     (thumb || card).appendChild(b);
   }
 
+  /* ---- 12.8 生命周期：样式 / 扫描定时器 / 路由启停 ---- */
   function ensureAssetStyle(sr) {
     // 卡片角标在 shadow 内，需要 shadow 自己的样式
     if (!sr.querySelector('#' + ASSET_STYLE_ID)) {
@@ -2049,6 +2078,7 @@
     }
   }
 
+  /* ---- 12.5 批量流程 ---- */
   async function downloadList(list, btn, scope) {
     if (assetBatchBusy) return;
     assetBatchBusy = true;
@@ -2093,7 +2123,7 @@
       : '没有可下载的素材', 3600);
   }
 
-  /* ---- 「下载素材」按钮可拖动 + 记住位置 ---- */
+  /* ---- 12.6 悬浮按钮（可拖动 + 记忆位置） ---- */
   const DL_POS_KEY = 'tyq.dlall.pos';
 
   function clampDlPos(btn, x, y) {
@@ -2159,16 +2189,26 @@
       if (suppressClick) { e.preventDefault(); e.stopImmediatePropagation(); }
     }, true);
 
-    window.addEventListener('resize', () => {
+    const onResize = () => {
       if (!btn.isConnected || btn.style.left === '') return;
       const r = btn.getBoundingClientRect();
       const p = applyDlPos(btn, r.left, r.top);
       try { localStorage.setItem(DL_POS_KEY, JSON.stringify(p)); } catch (e) { /* 忽略 */ }
+    };
+    window.addEventListener('resize', onResize);
+    // 按钮重建/移除时一并解绑，避免 window 上越挂越多
+    btn.__tyqCleanup = () => window.removeEventListener('resize', onResize);
+  }
+
+  function removeDlButton() {
+    document.querySelectorAll('.tyq-dlall').forEach((n) => {
+      try { if (n.__tyqCleanup) n.__tyqCleanup(); } catch (e) { /* 忽略 */ }
+      n.remove();
     });
   }
 
   function assetTick() {
-    if (!alive) return;
+    if (!alive || !assetTimer) return;
     const sr = SHADOW();
     if (!sr) return;
     ensureAssetStyle(sr);
@@ -2181,7 +2221,7 @@
         : '下载素材 (';
     let all = document.querySelector('.tyq-dlall');
     if (!list.length) {
-      if (all && !assetBatchBusy) all.remove();
+      if (all && !assetBatchBusy) removeDlButton();
       return;
     }
     if (!all) {
@@ -2203,24 +2243,28 @@
 
   function startAssetDL() {
     if (assetTimer) return;
-    assetTick();
     assetTimer = setInterval(assetTick, 1200);
+    assetTick();
   }
 
   function stopAssetDL() {
     clearInterval(assetTimer);
     assetTimer = 0;
-    document.querySelectorAll('.tyq-dlall').forEach((n) => n.remove());
+    removeDlButton();
     document.getElementById('tyq-asset-doc-style')?.remove();
     SHADOW()?.querySelectorAll('.tyq-dl').forEach((n) => n.remove());
     SHADOW()?.querySelector('#' + ASSET_STYLE_ID)?.remove();
   }
 
   function onRoute() {
-    if (location.pathname.includes(CANVAS_ROUTE)) { onCanvasRoute(); selfUpdate(); }
+    if (!alive) return;   // 热更新后旧实例的 pushState 包装仍会触发，必须在这里断掉
+    const onCanvas = location.pathname.includes(CANVAS_ROUTE);
+    const onCreative = location.pathname.includes(ASSET_ROUTE);
+    if (onCanvas) onCanvasRoute();
     else teardown();
-    if (location.pathname.includes(ASSET_ROUTE)) startAssetDL();
+    if (onCreative) startAssetDL();
     else stopAssetDL();
+    if (onCanvas || onCreative) selfUpdate();
   }
 
   const _push = history.pushState, _replace = history.replaceState;
