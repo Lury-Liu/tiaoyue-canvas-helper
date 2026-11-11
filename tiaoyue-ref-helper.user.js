@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.14.1
+// @version      1.15.0
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -30,7 +30,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.14.1';
+  const TYQ_VERSION = '1.15.0';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -1808,7 +1808,8 @@
   .tyq-dl:disabled{opacity:.85;cursor:default;background:#3a3a46}
   .tyq-dlall{position:fixed;right:18px;bottom:152px;z-index:2147482999;padding:8px 14px;border:0;border-radius:10px;
     background:#6c5ce7;color:#fff;font:500 12px/16px system-ui,-apple-system,"Microsoft YaHei",sans-serif;
-    cursor:pointer;box-shadow:0 6px 18px rgba(108,92,231,.35)}
+    cursor:grab;box-shadow:0 6px 18px rgba(108,92,231,.35);touch-action:none;user-select:none}
+  .tyq-dlall.dragging{cursor:grabbing;transition:none;opacity:.9}
   .tyq-dlall:disabled{background:#3a3a46;box-shadow:none;cursor:default}
   .tyq-dlall:hover:not(:disabled){filter:brightness(1.06)}
   `;
@@ -2100,6 +2101,80 @@
       : '没有可下载的素材', 3600);
   }
 
+  /* ---- 「下载素材」按钮可拖动 + 记住位置 ---- */
+  const DL_POS_KEY = 'tyq.dlall.pos';
+
+  function clampDlPos(btn, x, y) {
+    const w = btn.offsetWidth || 100;
+    const h = btn.offsetHeight || 32;
+    return {
+      x: Math.max(4, Math.min(innerWidth - w - 4, x)),
+      y: Math.max(4, Math.min(innerHeight - h - 4, y)),
+    };
+  }
+
+  function applyDlPos(btn, x, y) {
+    const p = clampDlPos(btn, x, y);
+    btn.style.left = p.x + 'px';
+    btn.style.top = p.y + 'px';
+    btn.style.right = 'auto';
+    btn.style.bottom = 'auto';
+    return p;
+  }
+
+  function restoreDlPos(btn) {
+    let p = null;
+    try { p = JSON.parse(localStorage.getItem(DL_POS_KEY) || 'null'); } catch (e) { p = null; }
+    if (p && typeof p.x === 'number' && typeof p.y === 'number') applyDlPos(btn, p.x, p.y);
+  }
+
+  function makeDlDraggable(btn) {
+    let down = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0, suppressClick = false;
+
+    btn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || btn.disabled) return;
+      const r = btn.getBoundingClientRect();
+      down = true; moved = false;
+      sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
+      try { btn.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+    });
+
+    btn.addEventListener('pointermove', (e) => {
+      if (!down) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (!moved && Math.hypot(dx, dy) < 4) return;
+      moved = true;
+      btn.classList.add('dragging');
+      applyDlPos(btn, ox + dx, oy + dy);
+    });
+
+    const end = () => {
+      if (!down) return;
+      down = false;
+      btn.classList.remove('dragging');
+      if (moved) {
+        const r = btn.getBoundingClientRect();
+        try { localStorage.setItem(DL_POS_KEY, JSON.stringify({ x: Math.round(r.left), y: Math.round(r.top) })); } catch (e) { /* 忽略 */ }
+        // 拖完这一下不算点击，避免误触下载
+        suppressClick = true;
+        setTimeout(() => { suppressClick = false; }, 320);
+      }
+    };
+    btn.addEventListener('pointerup', end);
+    btn.addEventListener('pointercancel', end);
+
+    btn.addEventListener('click', (e) => {
+      if (suppressClick) { e.preventDefault(); e.stopImmediatePropagation(); }
+    }, true);
+
+    window.addEventListener('resize', () => {
+      if (!btn.isConnected || btn.style.left === '') return;
+      const r = btn.getBoundingClientRect();
+      const p = applyDlPos(btn, r.left, r.top);
+      try { localStorage.setItem(DL_POS_KEY, JSON.stringify(p)); } catch (e) { /* 忽略 */ }
+    });
+  }
+
   function assetTick() {
     if (!alive) return;
     const sr = SHADOW();
@@ -2128,6 +2203,8 @@
         if (curList.length) downloadList(curList, all, cur.scope);
       });
       document.body.appendChild(all);
+      restoreDlPos(all);
+      makeDlDraggable(all);
     }
     if (!assetBatchBusy) all.textContent = label + list.length + ')';
   }
