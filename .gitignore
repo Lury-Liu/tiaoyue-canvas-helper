@@ -23,7 +23,6 @@ ty_probe/*
 !ty_probe/verify_loader.mjs
 !ty_probe/verify_update_e2e.mjs
 !ty_probe/verify_takeover.mjs
-!ty_probe/verify_autoupdate_e2e.mjs
 !ty_probe/rtest.mjs
 !ty_probe/rtest2.mjs
 !ty_probe/rtest3.mjs
