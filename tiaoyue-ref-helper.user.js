@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.16.0
+// @version      1.17.0
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -56,7 +56,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); stopAssetDL(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.16.0';
+  const TYQ_VERSION = '1.17.0';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -866,10 +866,19 @@
       .map((r) => (r.id || r.assetFileId || r.assetFileUuid || '') + ':' + (r.assetName || r.nodeTitle || r.name || ''))
       .join('|');
   }
+  // 节点 id：优先 React props，其次画布容器的 data-node-id，最后才退回素材签名。
+  // 用素材签名当键时，两个素材集合完全相同的节点会串历史（Alt+Z 跳错节点）。
+  function domNodeId(el) {
+    const hit = el && el.closest && el.closest('[data-node-id]');
+    return hit ? (hit.getAttribute('data-node-id') || '') : '';
+  }
+
   function nodeKey(a) {
     const p = (a && a.props) || {};
     const nid = p.nodeId || p.nodeUuid || (p.node && p.node.id) || '';
     if (nid) return 'n:' + nid;
+    const did = domNodeId(a && a.el);
+    if (did) return 'n:' + did;
     const sig = refsSig(a);
     if (sig) return 'r:' + sig;
     return 'e:' + elId(a.el);   // 无素材时的兜底：随 DOM 变化，不保证稳定
@@ -2087,6 +2096,29 @@
   }
 
   /* ---- 12.5 批量流程 ---- */
+  // 页面上取一个短文本（集名 / 片段名）；只在点下载时调用一次
+  function pickText(re) {
+    const sr = SHADOW();
+    if (!sr) return '';
+    for (const e of sr.querySelectorAll('span,div')) {
+      if (e.children.length) continue;
+      const t = (e.textContent || '').trim();
+      if (re.test(t)) return t.replace(/\s+/g, '');
+    }
+    return '';
+  }
+
+  // zip 基名：「第12集-片段1」「素材」
+  function zipBaseName(scope) {
+    if (scope === 'detail') return '角色素材';
+    const parts = [];
+    const ep = pickText(/^第\d+集$/);
+    const clip = pickText(/^片段\s*\d+/);
+    if (ep) parts.push(ep);
+    if (clip) parts.push(clip);
+    return (parts.length ? parts.join('-') : '素材').replace(/[\\/:*?"<>|]/g, '_');
+  }
+
   async function downloadList(list, btn, scope) {
     if (assetBatchBusy) return;
     assetBatchBusy = true;
@@ -2097,14 +2129,16 @@
     const total = list.length;
     const files = [];
     const used = new Map();
-    let fail = 0;
+    const failed = [];
+    let gotBytes = 0;
     for (let i = 0; i < total; i++) {
       const it = list[i];
-      btn.textContent = '打包中 ' + (i + 1) + '/' + total;
+      btn.textContent = '打包中 ' + (i + 1) + '/' + total + ' · ' + (gotBytes / 1048576).toFixed(1) + 'MB';
       try {
         const res = await fetch(it.url);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const u8 = new Uint8Array(await res.arrayBuffer());
+        gotBytes += u8.length;
         const ext = extOfType(res.headers.get('content-type'));
         let name = it.name + ext;
         if (used.has(name)) {
@@ -2115,20 +2149,24 @@
           used.set(name, 1);
         }
         files.push({ name, u8 });
-      } catch (e) { fail++; }
+      } catch (e) {
+        failed.push(it.name);
+      }
     }
     if (files.length) {
       const d = new Date();
       const p = (n) => String(n).padStart(2, '0');
       const stamp = '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
-      saveBlob(zipStore(files), '素材-' + stamp);
+      saveBlob(zipStore(files), zipBaseName(scope) + '-' + stamp);
     }
     assetBatchBusy = false;
     btn.disabled = false;
     btn.textContent = label + total + ')';
-    toast(files.length
-      ? ('已打包 ' + files.length + ' 张' + (fail ? '，失败 ' + fail : ''))
-      : '没有可下载的素材', 3600);
+    let msg;
+    if (!files.length) msg = '没有可下载的素材';
+    else if (!failed.length) msg = '已打包 ' + files.length + ' 张 · ' + (gotBytes / 1048576).toFixed(1) + 'MB';
+    else msg = '已打包 ' + files.length + ' 张，失败 ' + failed.length + '：' + failed.slice(0, 3).join('、') + (failed.length > 3 ? ' 等' : '');
+    toast(msg, 4200);
   }
 
   /* ---- 12.6 悬浮按钮（可拖动 + 记忆位置） ---- */
