@@ -1,5 +1,5 @@
 /* 跳跃视界 · 画布引用助手（MV3 扩展 content script，main world，内置兜底版）
-   版本：1.11.4。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
+   版本：1.11.5。在线更新由 loader.js 负责，本文件仅在无网/无更新时使用。 */
 
 
 
@@ -22,7 +22,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.11.4';
+  const TYQ_VERSION = '1.11.5';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';

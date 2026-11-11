@@ -15,6 +15,8 @@ const BUNDLED = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf
 
 let pass = 0, fail = 0;
 const lines = [];
+const rejections = [];
+process.on('unhandledRejection', (e) => rejections.push(e || new Error('unknown')));
 function ok(name, cond, extra = '') {
   if (cond) { pass++; lines.push(`  ✓ ${name}`); }
   else { fail++; lines.push(`  ✗ ${name}${extra ? ' → ' + extra : ''}`); }
@@ -29,8 +31,13 @@ async function run({ storage = {}, remote = {}, httpFail = false } = {}) {
     storage: {
       local: {
         get: async (keys) => {
+          // 模拟 Chrome：keys 必须是 string / string[] / object，数组里不能有 undefined
+          const list = Array.isArray(keys) ? keys : [keys];
+          for (const k of list) {
+            if (typeof k !== 'string') throw new TypeError("Error at parameter 'keys': Value did not match any choice.");
+          }
           const out = {};
-          for (const k of keys) if (k in store) out[k] = store[k];
+          for (const k of list) if (k in store) out[k] = store[k];
           return out;
         },
         set: async (obj) => { Object.assign(store, obj); },
@@ -72,7 +79,7 @@ console.log(`\n== 自动更新检查器回归（内置 v${BUNDLED}）==\n`);
   ok('A 有新版：记录待升级版本', r.store['tyq.upd.ver'] === '9.9.9', r.store['tyq.upd.ver']);
   ok('A 有新版：状态提示自动应用', /发现 v9\.9\.9/.test(r.store['tyq.upd.status'] || ''), r.store['tyq.upd.status']);
   ok('A 有新版：不拉代码（只请求 version.json）', r.fetched.length === 1, `fetched=${r.fetched.length}`);
-  ok('A 有新版：请求带时间戳穿透缓存', r.fetched[0].includes('?t='));
+  ok('A 有新版：请求带时间戳穿透缓存', (r.fetched[0] || '').includes('?t='));
 }
 
 /* B. 同版本 → 已是最新 */
@@ -129,6 +136,11 @@ console.log(`\n== 自动更新检查器回归（内置 v${BUNDLED}）==\n`);
 {
   const r = await run({ remote: { meta: { version: BUNDLED } } });
   ok('I 检查后写入时间戳', typeof r.store['tyq.upd.at'] === 'number' && r.store['tyq.upd.at'] > now - 5000);
+}
+
+/* J. 全程无未捕获的 Promise 拒绝（chrome.storage.get 参数非法会在这里暴露） */
+{
+  ok('J 无未捕获异常', rejections.length === 0, rejections.map((e) => e && e.message).join('; '));
 }
 
 console.log(lines.join('\n'));

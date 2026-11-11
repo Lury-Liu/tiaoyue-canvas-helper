@@ -2,7 +2,7 @@
 const REPO = TYQ_REPO;      // 定义在 config.js
 const BRANCH = TYQ_BRANCH;
 const BASE = `https://raw.githubusercontent.com/${REPO}/${BRANCH}`;
-const K = { code: 'tyq.upd.code', ver: 'tyq.upd.ver', at: 'tyq.upd.at', status: 'tyq.upd.status', online: 'tyq.upd.online' };
+const K = { ver: 'tyq.upd.ver', at: 'tyq.upd.at', status: 'tyq.upd.status', online: 'tyq.upd.online' };
 
 const $ = (id) => document.getElementById(id);
 const BUNDLED = chrome.runtime.getManifest().version;

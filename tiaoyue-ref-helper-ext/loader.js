@@ -52,7 +52,7 @@
 
   /* ==================== 主流程 ==================== */
   async function main() {
-    const st = await store.get([K.code, K.ver, K.at]);
+    const st = await store.get([K.at]);
 
     // 1) 节流：距上次检查不足 1 小时就到此为止
     if (st[K.at] && Date.now() - st[K.at] < CHECK_INTERVAL_MS) return;
