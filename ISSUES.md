@@ -38,7 +38,7 @@
 | v1.15.0 | 「下载素材」按钮可拖动并记住位置（localStorage `tyq.dlall.pos`），拖动后不误触下载 | 悬浮按钮遮挡内容只能靠拖动解决；`pointerdown/move/up` + 4px 阈值区分点击与拖动，`click` 捕获阶段拦截误触；窗口 resize 时重新夹紧到视口内 |
 | v1.16.0 | 模块化重整（0-12 编号 + 子分段）；修 6 处生命周期/提示 bug | ①`toast` 依赖 `ui`，创作页没有面板 → 下载提示全静默 ②热更新 `dispose` 未停下载定时器 → 双实例扫描 ③旧实例的 `pushState` 包装仍会跑 `onRoute` → 旧按钮复活 ④创作页不参与自更新，只开创作页永远不升级 ⑤拖动按钮的 window `resize` 监听随重建累积 ⑥详情弹窗只认 `.detailLayer`；另删死代码 `noteManualEdit` |
 | v1.17.0 | P0 下载体验：zip 名带「第N集-片段N」、进度显示已下载 MB、失败列出具体素材名；P1 节点身份优先 `data-node-id` | ①素材签名当历史键时，两个素材集合完全相同的节点会串历史 → 用 `a.el.closest("[data-node-id]")`，取不到仍回退签名，行为不退化 ②zip 只写时间戳时多项目分不清 ③失败只报数量没法补下 |
-| v1.18.2 | 下载改为「选一次文件夹直接写文件」（File System Access），不再打 zip；新增 MIT 许可与隐私说明 | ①浏览器连续 a[download] 会被多文件策略拦，zip 又要多一次解压 → `showDirectoryPicker` + `createWritable` 直接落盘，原名不改 ②重构时误删 `decorateCard` / `ensureAssetStyle` / `saveCard`，语法检查查不出，真机才暴露按钮消失——**改大段代码后必须跑真机** |
+| v1.18.2 | 下载改为「选一次文件夹直接写文件」（File System Access），不再打 zip；新增许可与隐私说明（后改为 MPL 2.0） | ①浏览器连续 a[download] 会被多文件策略拦，zip 又要多一次解压 → `showDirectoryPicker` + `createWritable` 直接落盘，原名不改 ②重构时误删 `decorateCard` / `ensureAssetStyle` / `saveCard`，语法检查查不出，真机才暴露按钮消失——**改大段代码后必须跑真机** |
 
 ---
 

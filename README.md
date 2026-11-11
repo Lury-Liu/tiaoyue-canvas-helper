@@ -189,7 +189,7 @@ git add -A && git commit -m "v1.11.0" && git push
 
 ## 10. 许可与隐私
 
-**许可**：MIT，见 [LICENSE](./LICENSE)。可自由使用、修改、分发，保留版权声明即可。
+**许可**：[MPL 2.0](./LICENSE)（Mozilla Public License 2.0）。可自由使用、修改、分发；**改过的那部分源文件需继续以 MPL 公开**，未改动的部分不受影响，可以和其它代码（含闭源）组合分发。
 
 **隐私**：
 
