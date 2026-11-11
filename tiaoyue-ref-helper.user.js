@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         跳跃视界 · 画布引用助手（@名字转引用 + Ctrl+F 查找替换）
 // @namespace    https://tiaoyue.local
-// @version      1.14.0
+// @version      1.14.1
 // @description  在跳跃视界画布提示词框里，把图片名字（如「艾洛文-高级职场套装」）一键转成 @图片N 引用；支持已引用素材清单、定位高亮、转换前预览勾选、撤销历史、面板拖动、Ctrl+F 查找替换。
 // @author       WorkBuddy
 // @match        https://www.tiaoyue.com/aigc/canvas/*
@@ -30,7 +30,7 @@
   window.__TYQ_DISPOSE__ = () => { alive = false; teardown(); };
 
   // 当前运行版本（build.js 发布时与 @version 同步重写；自更新比对用）
-  const TYQ_VERSION = '1.14.0';
+  const TYQ_VERSION = '1.14.1';
   // 自更新源（仓库转移时此处与 ext/config.js 一起改）
   const UPD_REPO = 'Lury-Liu/tiaoyue-canvas-helper';
   const UPD_BRANCH = 'main';
@@ -1850,11 +1850,37 @@
     return '';
   }
 
-  // 当前激活的「当前片段」面板：这里才是本片段实际用到的素材
+  // 「当前片段」tab：不绑定具体 class，按文本找，兼容不同项目的 tab 实现
+  function findClipTab(sr) {
+    const cands = Array.from(sr.querySelectorAll('button,[role="tab"],[class*="tab"],[class*="Tab"]'));
+    for (const n of cands) {
+      const t = (n.innerText || '').trim();
+      if (!/^当前片段/.test(t)) continue;
+      if (t.length > 24 || n.querySelectorAll('img').length) continue;
+      return n;
+    }
+    return null;
+  }
+
+  function isTabActive(n) {
+    return n.classList.contains('is-active')
+      || n.classList.contains('active')
+      || n.classList.contains('arco-tabs-tab-active')
+      || n.getAttribute('aria-selected') === 'true';
+  }
+
+  // 从 tab 往上找「最小的、含图片的」祖先，作为当前片段的内容区
   function activeClipPanel(sr) {
-    const tab = Array.from(sr.querySelectorAll('.maiya-underline-tabs__tab'))
-      .find((b) => b.classList.contains('is-active') && /当前片段/.test(b.innerText || ''));
-    return tab ? (tab.closest('.maiya-underline-tabs')?.parentElement || null) : null;
+    const tab = findClipTab(sr);
+    if (!tab || !isTabActive(tab)) return null;
+    let p = tab;
+    for (let i = 0; i < 6 && p; i++) {
+      p = p.parentElement;
+      if (!p) break;
+      const all = p.querySelectorAll('img').length;
+      if (all && all <= 90) return p;
+    }
+    return null;
   }
 
   /* 扫描范围优先级：

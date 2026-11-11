@@ -1,6 +1,6 @@
 # 画布引用助手 · 修复记录与技术债
 
-> 更新：2026-11-09 · 当前 **v1.14.0**
+> 更新：2026-11-09 · 当前 **v1.14.1**
 > 交接/架构/发布见 [README.md](./README.md)，本文只留「为什么这么改」和「还欠什么」。
 
 ---
@@ -34,6 +34,7 @@
 | v1.12.2 | 创作页资产库新增原图下载：卡片右下角「原图」+ 右下角「全部原图 (N)」 | 缩略图 URL 的 `?imageMogr2/format/webp/thumbnail/600x` 整段去掉即原图直链（带签名的 COS URL 同样适用）；COS 允许 CORS，fetch 成 blob 可保住素材名；**shadow 内元素只吃 shadow 自己的 `<style>`**，挂在 `document.body` 的批量按钮需要另注一份 |
 | v1.13.4 | 下载改为通用扫描：任意创作页/详情弹窗，按 `img.alt` 原名批量打包 zip；单张仍直接存 | ①**`img.alt` 才是素材原名**（莉娅-日常装配护手-左臂刀伤流血），资产卡标题只有角色名 ②批量 `a[download]` 会被浏览器"多文件下载"策略拦掉只剩第一张；`chrome.downloads` 下 COS 直链虽报 complete 但文件被系统清掉（`exists:false`）③**批量必须打包成单个 zip**，14 张 35MB 一次落盘 |
 | v1.14.0 | 下载范围收敛为「当前片段」：激活 tab 面板内 12 张即本片段实际引用的素材；文案随之变化 | 用户要的不是"整页所有图"，而是"当前片段用到的"。`.maiya-underline-tabs__tab.is-active` 文本以「当前片段」开头时，取 `closest(".maiya-underline-tabs").parentElement` 作为扫描根，恰好 12 张且 alt 即原名 |
+| v1.14.1 | 「当前片段」识别不再绑死 `.maiya-underline-tabs`：按文本找 tab + 多形态 active 判断 + 向上找最小含图祖先 | 硬编码单个 class 换个项目/组件就失效；`is-active` / `active` / `arco-tabs-tab-active` / `aria-selected` 都要认。实测两个项目分别识别 11 / 9，与 tab 数字一致 |
 
 ---
 
